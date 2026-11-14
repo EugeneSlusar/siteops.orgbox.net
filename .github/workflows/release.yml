@@ -3,6 +3,8 @@ name: release
 on:
   push:
     tags: ['v*']
+  # Ручной запуск (Actions → release → Run workflow): тег vX.Y.Z создаётся автоматически из выбранной ветки.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,13 +20,14 @@ jobs:
           extensions: sodium, zip, curl, mbstring
           coverage: none
 
-      - name: Версия тега должна совпадать с версией модуля
+      - name: Определить версию и проверить тег
         env:
-          TAG: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           VERSION=$(php -r '$arModuleVersion=[]; require "modules/orgbox.siteops/install/version.php"; echo $arModuleVersion["VERSION"];')
-          if [ "v$VERSION" != "$TAG" ]; then
-            echo "::error::Тег $TAG не совпадает с версией модуля v$VERSION"
+          if [ "$EVENT" = "push" ] && [ "v$VERSION" != "$REF_NAME" ]; then
+            echo "::error::Тег $REF_NAME не совпадает с версией модуля v$VERSION"
             exit 1
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -50,6 +53,10 @@ jobs:
       - name: Публикация релиза
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TARGET: ${{ github.sha }}
         run: |
-          gh release create "$TAG" dist/* --title "$TAG" --generate-notes
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "::error::Релиз v$VERSION уже существует. Поднимите версию в install/version.php."
+            exit 1
+          fi
+          gh release create "v$VERSION" dist/* --target "$TARGET" --title "v$VERSION" --generate-notes
