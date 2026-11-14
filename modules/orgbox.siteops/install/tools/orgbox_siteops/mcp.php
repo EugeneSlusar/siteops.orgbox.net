@@ -21,7 +21,7 @@ try {
         exit;
     }
     $body = (string) file_get_contents('php://input');
-    $response = \OrgBox\SiteOps\Bootstrap::mcpEndpoint()->handle((string) $_SERVER['REQUEST_METHOD'], $_SERVER, $body);
+    $response = \OrgBox\SiteOps\Bootstrap::module()->mcpEndpoint()->handle((string) $_SERVER['REQUEST_METHOD'], $_SERVER, $body);
 } catch (\Throwable $exception) {
     \OrgBox\SiteOps\Audit\BitrixAuditLogger::logError($exception);
     http_response_code(500);

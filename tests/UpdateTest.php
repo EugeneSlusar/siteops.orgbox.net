@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use OrgBox\SiteOps\Update\PackageProfile;
 use OrgBox\SiteOps\Update\ReleaseVerifier;
 use OrgBox\SiteOps\Update\UpdateException;
 use OrgBox\SiteOps\Update\Updater;
@@ -48,12 +49,12 @@ function makeModuleDir(string $version): string
     return $dir;
 }
 
-function installZip(string $bytes, string $moduleDir, string $version, string $current = '0.1.0', ?callable $after = null): void
+function installZip(string $bytes, string $moduleDir, string $version, string $current = '0.1.0', ?callable $after = null, ?PackageProfile $profile = null): void
 {
     $work = dirname($moduleDir) . '/work';
     $path = dirname($moduleDir) . '/pkg.zip';
     file_put_contents($path, $bytes);
-    (new ZipInstaller($after))->install($path, $moduleDir, $work, $version, $current);
+    (new ZipInstaller($profile ?? PackageProfile::module(), $after))->install($path, $moduleDir, $work, $version, $current);
 }
 
 function withCleanup(string $moduleDir, callable $body): void
@@ -275,7 +276,7 @@ function releaseFixture(string $version, bool $private = false, bool $withSig = 
 
 function makeUpdater(FakeHttp $http, string $public, string $moduleDir, string $current, string $token = '', bool $allowUnsigned = false): Updater
 {
-    return new Updater($http, new ReleaseVerifier($public, $allowUnsigned), new ZipInstaller(), 'o/r', $token, $moduleDir, dirname($moduleDir) . '/work', $current);
+    return new Updater($http, new ReleaseVerifier($public, $allowUnsigned), new ZipInstaller(PackageProfile::module()), PackageProfile::module(), 'o/r', $token, $moduleDir, dirname($moduleDir) . '/work', $current);
 }
 
 test('Updater: находит новую версию и ничего не делает, если версия последняя', function (): void {
@@ -359,7 +360,7 @@ test('Updater: тег, не похожий на версию, и релиз бе
 
 test('Updater: некорректное имя репозитория отклоняется', function (): void {
     foreach (['evil', 'a/b/c', '../x', 'a/b;rm', ''] as $repo) {
-        assertThrows(UpdateException::class, fn () => new Updater(new FakeHttp([]), new ReleaseVerifier('', true), new ZipInstaller(), $repo, '', '/x', '/y', '0.1.0'));
+        assertThrows(UpdateException::class, fn () => new Updater(new FakeHttp([]), new ReleaseVerifier('', true), new ZipInstaller(PackageProfile::module()), PackageProfile::module(), $repo, '', '/x', '/y', '0.1.0'));
     }
 });
 

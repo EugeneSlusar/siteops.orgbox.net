@@ -5,7 +5,7 @@
 
 Один раз устанавливается на сайт, отдельных серверов и Node.js не требует.
 
-> Статус: **0.2.0, ранняя версия.** Протокол, защита и обновление покрыты автотестами (96 проверок).
+> Статус: **0.3.0, ранняя версия.** Протокол, защита и обновление покрыты автотестами (106 проверок).
 > Слой доступа к инфоблокам (`BitrixIblockGateway`) проверить без живого Битрикса нельзя:
 > перед рабочим использованием пройдите чек-лист из [docs/VERIFY-ON-SITE.md](docs/VERIFY-ON-SITE.md).
 
@@ -41,10 +41,13 @@
 
 ## Установка и подключение
 
-1. Скачайте `orgbox.siteops-X.Y.Z.zip` из [Releases](../../releases) и распакуйте в `/local/modules/` (получится `/local/modules/orgbox.siteops/`).
-2. В админке: **Настройки → Настройки продукта → Модули** → «orgBox: SiteOps» → **Установить**.
-3. **Настройки → orgBox: SiteOps**: включите MCP, создайте токен, укажите ID инфоблоков.
-4. Подключите клиент к `https://ваш-сайт/bitrix/tools/orgbox_siteops/mcp.php`.
+Рекомендуемый способ, особенно для нескольких сайтов на одном Битриксе и для хостингов, где `local/` и `bitrix/` — симлинки:
+
+1. Скачайте `site.ops-X.Y.Z.zip` из [Releases](../../releases) и распакуйте в корень сайта (получится `<корень сайта>/site.ops/`).
+2. Откройте `https://ваш-сайт/site.ops/admin.php` (администратором): включите MCP, создайте токен, укажите ID инфоблоков.
+3. Подключите клиент к `https://ваш-сайт/site.ops/mcp.php`.
+
+Настройки и токен у каждого сайта свои. Есть и классическая установка модулем в `/local/modules` (архив `orgbox.siteops-X.Y.Z.zip`).
 
 Пошагово, с примерами для Claude Code и Claude Desktop: [docs/INSTALL.md](docs/INSTALL.md).
 
@@ -57,18 +60,19 @@
 ## Разработка
 
 ```bash
-php tests/run.php                 # 96 автотестов, Битрикс не нужен
-php tools/build-release.php dist  # собрать архив модуля и SHA-256
+php tests/run.php                 # 106 автотестов, Битрикс не нужен
+php tools/build-release.php dist  # собрать оба архива (модуль и site.ops) и SHA-256
 ```
 
 Требуется PHP 8.1+ (на CI проверяются 8.1, 8.2, 8.3). Выпуск релиза: тег `vX.Y.Z` (должен совпадать с версией в
 `modules/orgbox.siteops/install/version.php`) запускает сборку, подпись и публикацию.
 
 ```
-modules/orgbox.siteops/   — сам модуль (то, что попадает в архив релиза)
+modules/orgbox.siteops/   — сам модуль (источник кода для обеих форм установки)
   lib/OrgBox/SiteOps/     — Mcp, Tools, Iblock, Auth, Http, Update, Config, Audit
   install/                — установщик, точки входа (tools/), страницы админки
   admin/                  — страница настроек, пункт меню
+standalone/site.ops/      — точки входа, автозагрузчик и .htaccess формы «папка site.ops»
 tests/                    — автотесты без Битрикса (заглушки вместо базы)
 tools/                    — сборка и подпись релизов
 docs/                     — установка, безопасность, обновления, проверка на сайте
@@ -77,5 +81,5 @@ docs/                     — установка, безопасность, об
 ## Происхождение
 
 Выделено из модуля `orgbox.siteops` проекта DarkStyle (подписанный API для SEO-шаблонов). Старый API (HMAC) сохранён
-для совместимости, **но по новому адресу** `/bitrix/tools/orgbox_siteops/api.php` (раньше `/local/api/orgbox-siteops/v1.php`; адрес входит в подпись, клиентам нужно его обновить). Операции `seo.templates.get`, `seo.templates.update`,
+для совместимости, **но по новому адресу** `/site.ops/api.php` (в режиме модуля `/bitrix/tools/orgbox_siteops/api.php`) (раньше `/local/api/orgbox-siteops/v1.php`; адрес входит в подпись, клиентам нужно его обновить). Операции `seo.templates.get`, `seo.templates.update`,
 а также `tools.list` и `tools.call`.

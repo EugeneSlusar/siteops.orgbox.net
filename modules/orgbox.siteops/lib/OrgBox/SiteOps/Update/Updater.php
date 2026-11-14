@@ -11,6 +11,7 @@ final class Updater
         private HttpClient $http,
         private ReleaseVerifier $verifier,
         private ZipInstaller $installer,
+        private PackageProfile $profile,
         private string $repository,
         private string $githubToken,
         private string $moduleDir,
@@ -51,7 +52,7 @@ final class Updater
         foreach ((array) ($data['assets'] ?? []) as $asset) {
             $assets[(string) ($asset['name'] ?? '')] = $asset;
         }
-        $zipName = ZipInstaller::ROOT . '-' . $version . '.zip';
+        $zipName = $this->profile->zipName($version);
         if (!isset($assets[$zipName], $assets[$zipName . '.sha256'])) {
             throw new UpdateException('В релизе нет архива или контрольной суммы (' . $zipName . ').');
         }

@@ -6,9 +6,9 @@ namespace OrgBox\SiteOps\Update;
 
 final class ModuleInfo
 {
-    public static function version(string $moduleDir): string
+    public static function version(string $moduleDir, string $versionFile = 'install/version.php'): string
     {
-        $file = rtrim($moduleDir, '/') . '/install/version.php';
+        $file = rtrim($moduleDir, '/') . '/' . $versionFile;
         if (!is_file($file)) {
             return '0.0.0';
         }

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace OrgBox\SiteOps;
 
-use Bitrix\Main\Loader;
 use OrgBox\SiteOps\Audit\BitrixAuditLogger;
 use OrgBox\SiteOps\Auth\BearerTokenAuthenticator;
 use OrgBox\SiteOps\Auth\BitrixNonceStore;
@@ -20,26 +19,70 @@ use OrgBox\SiteOps\Mcp\McpServer;
 use OrgBox\SiteOps\Mcp\ToolRegistry;
 use OrgBox\SiteOps\Tools\IblockToolset;
 use OrgBox\SiteOps\Update\ModuleInfo;
+use OrgBox\SiteOps\Update\PackageProfile;
 
-/** Сборка объектов модуля для работы внутри Битрикса. */
+/**
+ * Сборка объектов внутри Битрикса. Две формы установки с одним и тем же кодом:
+ *  - модуль:       /local/modules/orgbox.siteops   (настройки общие для установки Битрикса);
+ *  - папка сайта:  <корень сайта>/site.ops          (настройки отдельные для каждого сайта по SITE_ID).
+ */
 final class Bootstrap
 {
-    public static function moduleDir(): string
-    {
-        return dirname(__DIR__, 3);
+    private function __construct(
+        private PackageProfile $profile,
+        private string $baseDir,
+        private string $siteId,
+    ) {
     }
 
-    public static function version(): string
+    /** Формальный модуль: папка модуля = на уровень выше lib/. */
+    public static function module(): self
     {
-        return ModuleInfo::version(self::moduleDir());
+        return new self(PackageProfile::module(), dirname(__DIR__, 3), '');
     }
 
-    public static function settings(): Settings
+    /** Папка site.ops в корне сайта; настройки привязаны к текущему сайту. */
+    public static function standalone(): self
     {
-        return new Settings(new BitrixOptionStore());
+        $siteId = defined('SITE_ID') ? (string) SITE_ID : '';
+
+        return new self(PackageProfile::standalone(), dirname(__DIR__, 3), $siteId);
     }
 
-    public static function tools(Settings $settings): ToolRegistry
+    public function profile(): PackageProfile
+    {
+        return $this->profile;
+    }
+
+    public function baseDir(): string
+    {
+        return $this->baseDir;
+    }
+
+    public function isStandalone(): bool
+    {
+        return $this->profile->root === 'site.ops';
+    }
+
+    public function version(): string
+    {
+        return ModuleInfo::version($this->baseDir, $this->profile->versionFile);
+    }
+
+    public function settings(): Settings
+    {
+        return new Settings(new BitrixOptionStore($this->siteId));
+    }
+
+    /** Папка для резервных копий и временных файлов обновления (закрыта от веба). */
+    public function workDir(): string
+    {
+        return $this->isStandalone()
+            ? $this->baseDir . '/_updates'
+            : $_SERVER['DOCUMENT_ROOT'] . '/upload/orgbox_siteops/updates';
+    }
+
+    public function tools(Settings $settings): ToolRegistry
     {
         $registry = new ToolRegistry();
         (new IblockToolset(new BitrixIblockGateway(), $settings, new BitrixAuditLogger()))->registerAll($registry);
@@ -47,14 +90,13 @@ final class Bootstrap
         return $registry;
     }
 
-    public static function mcpEndpoint(): McpEndpoint
+    public function mcpEndpoint(): McpEndpoint
     {
-        Loader::includeModule('orgbox.siteops');
-        $settings = self::settings();
+        $settings = $this->settings();
         $server = new McpServer(
-            self::tools($settings),
+            $this->tools($settings),
             $settings->writesEnabled(),
-            self::version(),
+            $this->version(),
             [BitrixAuditLogger::class, 'logError'],
         );
 
@@ -66,16 +108,17 @@ final class Bootstrap
         );
     }
 
-    public static function apiEndpoint(): ApiEndpoint
+    public function apiEndpoint(): ApiEndpoint
     {
-        Loader::includeModule('orgbox.siteops');
-        $settings = self::settings();
+        $settings = $this->settings();
+        $uri = $this->isStandalone() ? '/site.ops/api.php' : '/bitrix/tools/orgbox_siteops/api.php';
 
         return new ApiEndpoint(
             $settings,
             new RequestGuard($settings, new BitrixCounterStore()),
             new HmacAuthenticator($settings, new BitrixNonceStore()),
-            self::tools($settings),
+            $this->tools($settings),
+            $uri,
         );
     }
 }

@@ -12,14 +12,16 @@ use ZipArchive;
  */
 final class ZipInstaller
 {
-    public const ROOT = 'orgbox.siteops';
     private const MAX_FILES = 1000;
     private const MAX_TOTAL = 20971520;
     private const MAX_FILE = 5242880;
     private const EXTENSIONS = ['php', 'md', 'txt', 'json', 'css', 'js', 'svg', 'example', 'htaccess'];
 
     /** @param (callable(string):void)|null $afterApply вызывается после замены файлов, получает папку модуля */
-    public function __construct(private $afterApply = null)
+    /** Относительный путь рабочей папки внутри папки модуля (например «_updates»); её содержимое не копируется и не удаляется. */
+    private ?string $skip = null;
+
+    public function __construct(private PackageProfile $profile, private $afterApply = null)
     {
     }
 
@@ -31,6 +33,9 @@ final class ZipInstaller
         }
         $this->ensureDir($workDir);
         $this->denyWebAccess($workDir);
+        $realModule = realpath($moduleDir) ?: $moduleDir;
+        $realWork = realpath($workDir) ?: $workDir;
+        $this->skip = str_starts_with($realWork, $realModule . '/') ? substr($realWork, strlen($realModule) + 1) : null;
 
         $lock = fopen($workDir . '/.lock', 'c');
         if ($lock === false || !flock($lock, LOCK_EX | LOCK_NB)) {
@@ -43,7 +48,7 @@ final class ZipInstaller
 
         try {
             $this->extractSafely($zipPath, $staging);
-            $newRoot = $staging . '/' . self::ROOT;
+            $newRoot = $staging . '/' . $this->profile->root;
             $this->assertPackage($newRoot, $expectedVersion, $currentVersion);
 
             $this->copyTree($moduleDir, $backup);
@@ -127,8 +132,8 @@ final class ZipInstaller
             && !str_contains($name, '\\')
             && !str_contains($name, '//')
             && !str_starts_with($name, '/')
-            && !preg_match('#(^|/)\.\.(/|$)#', $name)
-            && preg_match('#^' . preg_quote(self::ROOT, '#') . '(/[A-Za-z0-9_.\-]+)*/?$#', $name) === 1;
+            && !preg_match('#(^|/)\.{1,2}(/|$)#', $name)
+            && preg_match('#^' . preg_quote($this->profile->root, '#') . '(/[A-Za-z0-9_.\-]+)*/?$#', $name) === 1;
         if (!$valid) {
             throw new UpdateException('Небезопасный путь в архиве: ' . $name);
         }
@@ -136,12 +141,12 @@ final class ZipInstaller
 
     private function assertPackage(string $root, string $expectedVersion, string $currentVersion): void
     {
-        foreach (['include.php', 'install/index.php', 'install/version.php', 'lib'] as $required) {
+        foreach ($this->profile->required as $required) {
             if (!file_exists($root . '/' . $required)) {
                 throw new UpdateException('В архиве нет обязательного файла: ' . $required);
             }
         }
-        $version = ModuleInfo::version($root);
+        $version = ModuleInfo::version($root, $this->profile->versionFile);
         if ($version !== $expectedVersion) {
             throw new UpdateException('Версия в архиве (' . $version . ') не совпадает с версией релиза (' . $expectedVersion . ').');
         }
@@ -197,7 +202,11 @@ final class ZipInstaller
             if ($file->isLink() || !$file->isFile()) {
                 continue;
             }
-            $result[] = ltrim(substr($file->getPathname(), strlen($root)), '/');
+            $relative = ltrim(substr($file->getPathname(), strlen($root)), '/');
+            if ($this->skip !== null && ($relative === $this->skip || str_starts_with($relative, $this->skip . '/'))) {
+                continue;
+            }
+            $result[] = $relative;
         }
         sort($result);
 

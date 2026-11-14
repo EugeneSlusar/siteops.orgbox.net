@@ -35,12 +35,14 @@ jobs:
       - name: Сборка архива
         run: php tools/build-release.php dist
 
-      - name: Подпись архива
+      - name: Подпись архивов
         env:
           SITEOPS_SIGNING_KEY: ${{ secrets.SITEOPS_SIGNING_KEY }}
         run: |
           if [ -n "$SITEOPS_SIGNING_KEY" ]; then
-            php tools/sign-release.php "dist/orgbox.siteops-${VERSION}.zip"
+            for archive in "dist/orgbox.siteops-${VERSION}.zip" "dist/site.ops-${VERSION}.zip"; do
+              php tools/sign-release.php "$archive"
+            done
           else
             echo "::warning::Секрет SITEOPS_SIGNING_KEY не задан: релиз будет без подписи, сайты с настроенным ключом его не установят."
           fi
@@ -50,4 +52,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" dist/orgbox.siteops-* --title "$TAG" --generate-notes
+          gh release create "$TAG" dist/* --title "$TAG" --generate-notes
