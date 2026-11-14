@@ -1,0 +1,5 @@
+/dist/
+/vendor/
+*.zip
+*.sig
+.DS_Store

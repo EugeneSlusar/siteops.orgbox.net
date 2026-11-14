@@ -1,0 +1,53 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: sodium, zip, curl, mbstring
+          coverage: none
+
+      - name: Версия тега должна совпадать с версией модуля
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=$(php -r '$arModuleVersion=[]; require "modules/orgbox.siteops/install/version.php"; echo $arModuleVersion["VERSION"];')
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "::error::Тег $TAG не совпадает с версией модуля v$VERSION"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Автотесты
+        run: php tests/run.php
+
+      - name: Сборка архива
+        run: php tools/build-release.php dist
+
+      - name: Подпись архива
+        env:
+          SITEOPS_SIGNING_KEY: ${{ secrets.SITEOPS_SIGNING_KEY }}
+        run: |
+          if [ -n "$SITEOPS_SIGNING_KEY" ]; then
+            php tools/sign-release.php "dist/orgbox.siteops-${VERSION}.zip"
+          else
+            echo "::warning::Секрет SITEOPS_SIGNING_KEY не задан: релиз будет без подписи, сайты с настроенным ключом его не установят."
+          fi
+
+      - name: Публикация релиза
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/orgbox.siteops-* --title "$TAG" --generate-notes
