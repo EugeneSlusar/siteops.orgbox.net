@@ -54,6 +54,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && check_bitrix_sessid()) {
     try {
         if ($action === 'save') {
             $store->set('mcp_enabled', isset($_POST['mcp_enabled']) ? 'Y' : 'N');
+            if ($siteops->oauthAvailable()) {
+                $store->set('oauth_enabled', isset($_POST['oauth_enabled']) ? 'Y' : 'N');
+                $publicUrl = rtrim(trim((string) ($_POST['public_url'] ?? '')), '/');
+                if ($publicUrl === '' || preg_match('#^https://[A-Za-z0-9.\-]+(:\d{1,5})?$#', $publicUrl)) {
+                    $store->set('public_url', $publicUrl);
+                } else {
+                    $messages[] = ['ERROR', 'Адрес сайта: только https://домен, без пути. Значение не сохранено.'];
+                }
+            }
             $store->set('mode', ($_POST['mode'] ?? '') === Settings::MODE_READWRITE ? Settings::MODE_READWRITE : Settings::MODE_READONLY);
             $store->set('allowed_iblocks', implode(',', Settings::intList((string) ($_POST['allowed_iblocks'] ?? ''))));
             $store->set('default_iblock_id', (string) max(0, (int) ($_POST['default_iblock_id'] ?? 0)));
@@ -70,6 +79,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && check_bitrix_sessid()) {
         } elseif ($action === 'token') {
             $newToken = $settings->generateToken();
             $messages[] = ['OK', 'Новый токен создан. Прежний токен больше не работает.'];
+        } elseif ($action === 'revoke_client' && $siteops->oauthAvailable()) {
+            $clientId = (string) ($_POST['client_id'] ?? '');
+            $siteops->oauthStore()->revokeClient($clientId);
+            (new \OrgBox\SiteOps\Audit\BitrixAuditLogger())->log('oauth.revoke_client', ['client_id' => $clientId, 'user_id' => (int) $GLOBALS['USER']->GetID()]);
+            $messages[] = ['OK', 'Подключение отозвано: токены этого клиента больше не работают.'];
         } elseif ($action === 'revoke') {
             $settings->revokeToken();
             $messages[] = ['OK', 'Токен отозван.'];
@@ -99,8 +113,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && check_bitrix_sessid()) {
     $settings = $siteops->settings();
 }
 
-$scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-$mcpUrl = $scheme . '://' . $_SERVER['HTTP_HOST'] . ($siteops->isStandalone() ? '/site.ops/mcp.php' : '/bitrix/tools/orgbox_siteops/mcp.php');
+$mcpUrl = $siteops->isStandalone()
+    ? $siteops->baseUrl() . '/site.ops/mcp'
+    : ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http') . '://' . $_SERVER['HTTP_HOST'] . '/bitrix/tools/orgbox_siteops/mcp.php';
+$connections = [];
+if ($siteops->oauthAvailable() && $settings->oauthEnabled()) {
+    try {
+        $connections = $siteops->oauthStore()->listConnections(time());
+    } catch (\Throwable $exception) {
+        $messages[] = ['ERROR', 'Не удалось прочитать список подключений: ' . $exception->getMessage()];
+    }
+}
 
 require $_SERVER['DOCUMENT_ROOT'] . '/bitrix/modules/main/include/prolog_admin_after.php';
 $APPLICATION->SetTitle('orgBox: SiteOps — MCP-сервер');
@@ -134,6 +157,10 @@ $action = $APPLICATION->GetCurPageParam('', [], false);
     <input type="hidden" name="action" value="save">
     <table class="adm-detail-content-table edit-table">
         <tr><td width="35%">MCP-сервер:</td><td><label><input type="checkbox" name="mcp_enabled" value="Y"<?=$settings->mcpEnabled() ? ' checked' : ''?>> включён</label></td></tr>
+        <?php if ($siteops->oauthAvailable()): ?>
+        <tr><td>Подключение по ссылке (OAuth):</td><td><label><input type="checkbox" name="oauth_enabled" value="Y"<?=$settings->oauthEnabled() ? ' checked' : ''?>> разрешить клиентам MCP подключаться через вход администратора</label><br><small>Клиент выдаст ссылку, вы войдёте в Битрикс и нажмёте «Разрешить». Токен вручную не нужен.</small></td></tr>
+        <tr><td>Адрес сайта для OAuth:</td><td><input type="text" name="public_url" size="40" value="<?=$h($settings->publicUrl())?>" placeholder="<?=$h($siteops->baseUrl())?>"><br><small>https://домен без пути. Пусто — определяется по запросу. Лучше задать явно.</small></td></tr>
+        <?php endif; ?>
         <tr><td>Режим:</td><td>
             <label><input type="radio" name="mode" value="readonly"<?=!$settings->writesEnabled() ? ' checked' : ''?>> только чтение (рекомендуется)</label><br>
             <label><input type="radio" name="mode" value="readwrite"<?=$settings->writesEnabled() ? ' checked' : ''?>> чтение и запись (удаления нет; изменения пишутся в журнал событий)</label>
@@ -154,6 +181,34 @@ $action = $APPLICATION->GetCurPageParam('', [], false);
     </table>
     <input class="adm-btn-save" type="submit" value="Сохранить">
 </form>
+
+<?php if ($siteops->oauthAvailable() && $settings->oauthEnabled()): ?>
+<h3>Подключения (OAuth)</h3>
+<p>Как подключить клиент: добавьте адрес <b><?=$h($mcpUrl)?></b> в Claude (в Claude Code: <code>claude mcp add --transport http siteops <?=$h($mcpUrl)?></code>, затем <code>/mcp</code> и «Authenticate»).
+Клиент откроет ссылку на странице согласия: войдите администратором и нажмите «Разрешить».</p>
+<?php if ($connections === []): ?>
+    <p><i>Активных подключений нет.</i></p>
+<?php else: ?>
+    <table class="adm-list-table" style="max-width:900px">
+        <tr class="adm-list-table-header"><td class="adm-list-table-cell">Клиент</td><td class="adm-list-table-cell">Адрес возврата</td><td class="adm-list-table-cell">Создан</td><td class="adm-list-table-cell">Последний токен</td><td class="adm-list-table-cell"></td></tr>
+        <?php foreach ($connections as $connection): ?>
+        <tr class="adm-list-table-row">
+            <td class="adm-list-table-cell"><?=$h($connection['name'])?></td>
+            <td class="adm-list-table-cell"><?=$h((string) (parse_url($connection['redirect_uris'][0] ?? '', PHP_URL_HOST) ?: ''))?></td>
+            <td class="adm-list-table-cell"><?=$h(date('d.m.Y H:i', (int) $connection['created']))?></td>
+            <td class="adm-list-table-cell"><?=$h(date('d.m.Y H:i', (int) $connection['last_used']))?></td>
+            <td class="adm-list-table-cell">
+                <form method="post" action="<?=$h($action)?>" style="margin:0">
+                    <?=bitrix_sessid_post()?>
+                    <input type="hidden" name="client_id" value="<?=$h($connection['client_id'])?>">
+                    <button class="adm-btn" name="action" value="revoke_client" onclick="return confirm('Отозвать подключение?')">Отозвать</button>
+                </form>
+            </td>
+        </tr>
+        <?php endforeach; ?>
+    </table>
+<?php endif; ?>
+<?php endif; ?>
 
 <form method="post" action="<?=$h($action)?>" style="margin-top:16px">
     <?=bitrix_sessid_post()?>

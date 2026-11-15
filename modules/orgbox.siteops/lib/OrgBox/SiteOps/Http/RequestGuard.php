@@ -27,8 +27,15 @@ final class RequestGuard
             throw new AuthException('Недопустимый Origin.', 403);
         }
 
+        $this->assertRateLimit($server);
+    }
+
+    /** Только лимит запросов (для OAuth-адресов: список IP и Origin к ним не применяются). */
+    public function assertRateLimit(array $server, string $bucket = 'ip'): void
+    {
+        $ip = (string) ($server['REMOTE_ADDR'] ?? '');
         $minute = intdiv($this->now ?? time(), 60);
-        if ($this->counters->increment('ip:' . $ip . ':' . $minute, 120) > $this->settings->rateLimitPerMinute()) {
+        if ($this->counters->increment($bucket . ':' . $ip . ':' . $minute, 120) > $this->settings->rateLimitPerMinute()) {
             throw new AuthException('Слишком много запросов.', 429);
         }
     }

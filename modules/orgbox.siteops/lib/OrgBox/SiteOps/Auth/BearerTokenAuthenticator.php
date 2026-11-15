@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OrgBox\SiteOps\Auth;
 
 use OrgBox\SiteOps\Config\Settings;
+use OrgBox\SiteOps\OAuth\OAuthServer;
 
 /**
  * Проверка токена доступа MCP. Токен берётся из заголовка Authorization: Bearer ...
@@ -12,21 +13,27 @@ use OrgBox\SiteOps\Config\Settings;
  */
 final class BearerTokenAuthenticator
 {
-    public function __construct(private Settings $settings)
+    public function __construct(private Settings $settings, private ?OAuthServer $oauth = null)
     {
     }
 
+    /** Принимается либо статический токен из настроек, либо OAuth-токен доступа (если OAuth включён). */
     public function assertValid(array $server): void
     {
-        $expectedHash = $this->settings->tokenHash();
-        if ($expectedHash === '') {
-            throw new AuthException('Токен доступа не создан.');
+        $token = self::extractToken($server);
+        if ($token === '') {
+            throw new AuthException('Нужен токен доступа.');
         }
 
-        $token = self::extractToken($server);
-        if ($token === '' || !hash_equals($expectedHash, hash('sha256', $token))) {
-            throw new AuthException('Неверный токен доступа.');
+        $expectedHash = $this->settings->tokenHash();
+        if ($expectedHash !== '' && hash_equals($expectedHash, hash('sha256', $token))) {
+            return;
         }
+        if ($this->oauth !== null && $this->settings->oauthEnabled() && $this->oauth->authenticateAccessToken($token) !== null) {
+            return;
+        }
+
+        throw new AuthException('Неверный или просроченный токен доступа.');
     }
 
     public static function extractToken(array $server): string

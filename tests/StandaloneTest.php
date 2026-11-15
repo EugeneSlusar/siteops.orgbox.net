@@ -31,7 +31,7 @@ function releaseVersion(): string
     return $arModuleVersion['VERSION'];
 }
 
-/** Папка site.ops «установленной» старой версии с рабочей папкой _updates внутри. */
+/** Папка site.ops «установленной» старой версии (раскладка 0.3.0: точки входа в корне) с рабочей папкой _updates внутри. */
 function makeSiteDir(string $version): string
 {
     $dir = tempDir() . '/site.ops';
@@ -103,10 +103,13 @@ test('сборка: site.ops содержит точки входа, .htaccess, 
         for ($i = 0; $i < $zip->numFiles; $i++) {
             $names[] = $zip->getNameIndex($i);
         }
-        foreach (['mcp.php', 'api.php', 'admin.php', 'autoload.php', '.htaccess', 'version.php', 'lib/OrgBox/SiteOps/Bootstrap.php', 'lib/OrgBox/SiteOps/Admin/settings.view.php'] as $file) {
+        foreach (['mcp/index.php', 'api/index.php', 'admin/index.php', 'oauth/authorize/index.php', 'oauth/token/index.php', 'oauth/register/index.php', 'oauth/revoke/index.php',
+            'oauth/.well-known/oauth-authorization-server/index.php', 'oauth/.well-known/openid-configuration/index.php', 'oauth/.well-known/oauth-protected-resource/index.php',
+            '.htaccess', 'mcp/.htaccess', 'oauth/.htaccess', 'autoload.php', 'version.php', 'lib/OrgBox/SiteOps/Bootstrap.php', 'lib/OrgBox/SiteOps/Admin/settings.view.php', 'lib/OrgBox/SiteOps/Admin/authorize.view.php'] as $file) {
             assertTrue(in_array('site.ops/' . $file, $names, true), $file);
         }
         $moduleClasses = array_map(static fn ($f) => substr($f, strlen(__DIR__ . '/../modules/orgbox.siteops/')), glob(__DIR__ . '/../modules/orgbox.siteops/lib/OrgBox/SiteOps/*/*.php') ?: []);
+        assertTrue(!in_array('site.ops/mcp.php', $names, true) && !in_array('site.ops/admin.php', $names, true), 'старых точек входа с .php в корне быть не должно');
         foreach ($moduleClasses as $relative) {
             assertTrue(in_array('site.ops/' . $relative, $names, true), $relative);
         }
@@ -163,6 +166,10 @@ test('site.ops: установка нового релиза поверх ста
 
         assertContains(releaseVersion(), (string) file_get_contents($dir . '/version.php'));
         assertTrue(!file_exists($dir . '/lib/OrgBox/SiteOps/Old.php'), 'устаревший файл удалён');
+        foreach (['mcp.php', 'api.php', 'admin.php'] as $legacy) {
+            assertTrue(!file_exists($dir . '/' . $legacy), 'обновление с раскладки 0.3.0 удаляет старую точку входа ' . $legacy);
+        }
+        assertTrue(is_file($dir . '/mcp/index.php') && is_file($dir . '/admin/index.php') && is_file($dir . '/oauth/token/index.php'), 'новые точки входа установлены');
         assertContains('Require all denied', (string) file_get_contents($dir . '/.htaccess'));
         assertSame('не трогать', (string) file_get_contents($work . '/keep-me.txt'), 'рабочая папка не затронута');
 
@@ -239,14 +246,106 @@ test('site.ops: Updater ищет в релизе архив site.ops-<верси
     }
 });
 
-test('site.ops: точки входа ссылаются только на существующие классы и файлы', function (): void {
-    foreach (['mcp.php', 'api.php', 'admin.php', 'autoload.php'] as $file) {
-        $code = (string) file_get_contents(__DIR__ . '/../standalone/site.ops/' . $file);
-        preg_match_all('/\\\\OrgBox\\\\SiteOps\\\\[A-Za-z\\\\]+/', $code, $m);
+test('site.ops: точки входа ссылаются только на существующие классы, а подключаемые файлы существуют', function (): void {
+    $root = __DIR__ . '/../standalone/site.ops';
+    $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
+    $count = 0;
+    foreach ($files as $file) {
+        if ($file->getExtension() !== 'php') {
+            continue;
+        }
+        $count++;
+        $code = (string) file_get_contents($file->getPathname());
+        $name = substr($file->getPathname(), strlen($root) + 1);
+        preg_match_all('/\\\\?OrgBox\\\\SiteOps\\\\[A-Za-z\\\\]+/', $code, $m);
         foreach (array_unique($m[0]) as $class) {
             $class = ltrim($class, '\\');
-            assertTrue(class_exists($class) || interface_exists($class), $file . ' → ' . $class);
+            assertTrue(class_exists($class) || interface_exists($class), $name . ' → ' . $class);
+        }
+        // require __DIR__ . '/../..': путь, нормализованный от папки файла, должен указывать на реальный файл пакета.
+        // lib/ в пакете берётся из модуля (build-release копирует modules/orgbox.siteops/lib → site.ops/lib).
+        preg_match_all("#__DIR__ \\. '(/[^']+\\.php)'#", $code, $paths);
+        foreach ($paths[1] as $relative) {
+            $parts = [];
+            foreach (explode('/', $file->getPath() . $relative) as $segment) {
+                if ($segment === '..') {
+                    array_pop($parts);
+                } elseif ($segment !== '.' && $segment !== '') {
+                    $parts[] = $segment;
+                }
+            }
+            $target = '/' . implode('/', $parts);
+            $rootReal = '/' . implode('/', array_filter(explode('/', (string) realpath($root)), 'strlen'));
+            $moduleLib = (string) realpath(__DIR__ . '/../modules/orgbox.siteops/lib');
+            $exists = str_starts_with($target, $rootReal . '/lib/')
+                ? is_file($moduleLib . substr($target, strlen($rootReal . '/lib')))
+                : is_file($target);
+            assertTrue($exists, $name . ' → ' . $relative . ' (' . $target . ')');
         }
     }
+    assertTrue($count >= 11, 'найдено точек входа: ' . $count);
     assertTrue(is_file(__DIR__ . '/../modules/orgbox.siteops/lib/OrgBox/SiteOps/Admin/settings.view.php'));
+    assertTrue(is_file(__DIR__ . '/../modules/orgbox.siteops/lib/OrgBox/SiteOps/Admin/authorize.view.php'));
+});
+
+test('site.ops: .htaccess — по умолчанию всё закрыто, открыты только папки точек входа, FilesMatch не используется', function (): void {
+    $root = __DIR__ . '/../standalone/site.ops';
+    $main = (string) file_get_contents($root . '/.htaccess');
+    assertContains('Require all denied', $main);
+    assertContains('Deny from all', $main);
+    assertTrue(!str_contains($main, 'FilesMatch') && !str_contains($main, 'Require all granted'),
+        'FilesMatch в корне открыл бы index.php во вложенных папках (например, в копиях _updates)');
+    // Все index.php лежат только в папках с собственным разрешающим .htaccess
+    $entry = ['mcp', 'api', 'admin', 'oauth'];
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)) as $file) {
+        if ($file->getFilename() !== 'index.php') {
+            continue;
+        }
+        $relative = substr($file->getPathname(), strlen($root) + 1);
+        $top = explode('/', $relative)[0];
+        assertTrue(in_array($top, $entry, true), 'index.php вне папок точек входа: ' . $relative);
+        assertContains('Require all granted', (string) file_get_contents($root . '/' . $top . '/.htaccess'), $top);
+    }
+    assertContains('DirectorySlash Off', $main, 'без этого Apache редиректит /site.ops/mcp на /site.ops/mcp/ и POST теряет тело');
+    assertContains('^(mcp|api|admin)/?$ $1/index.php', $main);
+    assertContains('oauth/(authorize|token|register|revoke)/?$', $main);
+    assertContains('oauth-authorization-server|openid-configuration|oauth-protected-resource', $main, 'документы обнаружения без слэша');
+    assertContains('HTTP_AUTHORIZATION', $main, 'заголовок Authorization передаётся в PHP');
+});
+
+test('site.ops: рабочая папка обновлений закрывается так, чтобы index.php в копиях не открывался', function (): void {
+    $dir = makeSiteDir('0.0.1');
+    $out = buildRelease();
+    try {
+        $work = $dir . '/_updates';
+        file_put_contents(dirname($dir) . '/pkg.zip', (string) file_get_contents($out . '/site.ops-' . releaseVersion() . '.zip'));
+        (new ZipInstaller(PackageProfile::standalone()))->install(dirname($dir) . '/pkg.zip', $dir, $work, releaseVersion(), '0.0.1');
+        $htaccess = (string) file_get_contents($work . '/.htaccess');
+        assertContains('Deny from all', $htaccess);
+        assertContains('FilesMatch', $htaccess, 'явный запрет на все файлы, включая index.php копий');
+    } finally {
+        removeDir($out);
+        removeDir(dirname($dir));
+    }
+});
+
+test('документация: фрагмент корневого .well-known в INSTALL.md совпадает с файлом, который проверяет Apache-скрипт', function (): void {
+    $install = (string) file_get_contents(__DIR__ . '/../docs/INSTALL.md');
+    foreach (file(__DIR__ . '/../standalone/root-well-known.htaccess', FILE_IGNORE_NEW_LINES) as $line) {
+        if (str_starts_with($line, 'RewriteRule') || str_starts_with($line, 'RewriteEngine')) {
+            assertContains($line, $install, 'в INSTALL.md нет строки: ' . $line);
+        }
+    }
+});
+
+test('документация: во всех документах нет упоминаний старых адресов site.ops/*.php', function (): void {
+    foreach (array_merge(glob(__DIR__ . '/../docs/*.md') ?: [], [__DIR__ . '/../README.md']) as $file) {
+        $text = (string) file_get_contents($file);
+        foreach (['/site.ops/mcp.php', '/site.ops/admin.php', '/site.ops/api.php'] as $old) {
+            // допустимо только в разделе перехода с 0.3.x и в описании старых адресов
+            if (str_contains($text, $old)) {
+                assertTrue(str_contains($text, '0.3'), basename($file) . ' упоминает ' . $old . ' без пометки о версии 0.3');
+            }
+        }
+    }
 });

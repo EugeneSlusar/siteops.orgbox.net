@@ -29,3 +29,18 @@ jobs:
         run: php tests/run.php
       - name: Сборка архива релиза
         run: php tools/build-release.php dist
+
+  # .htaccess пакета site.ops можно проверить только на настоящем Apache: безслэшные адреса, запреты, Authorization.
+  apache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: sodium, zip, curl, mbstring
+          coverage: none
+      - name: Установить Apache и PHP CGI
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends apache2 php-cgi
+      - name: Проверка .htaccess на настоящем Apache
+        run: bash tests/apache/verify.sh

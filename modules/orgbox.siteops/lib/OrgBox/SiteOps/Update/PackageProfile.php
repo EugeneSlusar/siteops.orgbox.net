@@ -24,7 +24,9 @@ final class PackageProfile
     /** Отдельная папка в публичной части сайта: public_html/site.ops. */
     public static function standalone(): self
     {
-        return new self('site.ops', ['mcp.php', 'api.php', 'admin.php', 'autoload.php', 'version.php', '.htaccess', 'lib'], 'version.php');
+        // Только то, что не меняется при смене раскладки точек входа. Иначе старая версия, обновляющая сама себя,
+        // отклонила бы новый архив (так было бы при переходе 0.3 → 0.4). Состав архива проверяют тесты сборки.
+        return new self('site.ops', ['autoload.php', 'version.php', '.htaccess', 'lib'], 'version.php');
     }
 
     /** Имя архива релиза: <корень>-<версия>.zip */

@@ -241,7 +241,21 @@ final class ZipInstaller
     {
         $file = $dir . '/.htaccess';
         if (!is_file($file)) {
-            file_put_contents($file, "Require all denied\n<IfModule !mod_authz_core.c>\nOrder allow,deny\nDeny from all\n</IfModule>\n");
+            file_put_contents($file, <<<'HTACCESS'
+# Резервные копии кода: доступ из браузера закрыт полностью.
+# FilesMatch нужен, чтобы запрет действовал и для index.php в копиях, даже если родительский .htaccess что-то разрешает.
+<IfModule mod_authz_core.c>
+    Require all denied
+    <FilesMatch ".*">
+        Require all denied
+    </FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>
+
+HTACCESS);
         }
     }
 

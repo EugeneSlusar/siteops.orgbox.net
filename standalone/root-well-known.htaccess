@@ -1,0 +1,6 @@
+# Необязательно. Для клиентов MCP, которые ищут документы OAuth в корне сайта, а не по ссылке из ответа 401.
+# Вставьте в .htaccess КОРНЯ сайта ДО правил Битрикса (до строки "RewriteCond %{REQUEST_FILENAME} !-f").
+RewriteEngine On
+RewriteRule ^\.well-known/oauth-authorization-server(/site\.ops/oauth)?/?$ site.ops/oauth/.well-known/oauth-authorization-server/index.php [L]
+RewriteRule ^\.well-known/openid-configuration(/site\.ops/oauth)?/?$ site.ops/oauth/.well-known/openid-configuration/index.php [L]
+RewriteRule ^\.well-known/oauth-protected-resource(/site\.ops/mcp)?/?$ site.ops/oauth/.well-known/oauth-protected-resource/index.php [L]

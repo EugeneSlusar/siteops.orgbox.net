@@ -1,16 +1,30 @@
-# orgBox SiteOps: наружу открыты только три точки входа, всё остальное (код, резервные копии) закрыто.
+# orgBox SiteOps: по умолчанию всё закрыто. Открыты только папки точек входа (mcp, api, admin, oauth):
+# в каждой лежит свой .htaccess с разрешением. Код (lib/) и резервные копии (_updates/) недоступны из браузера.
+# Требуется AllowOverride All (как и для самого Битрикса).
 Options -Indexes
 
 <IfModule mod_authz_core.c>
     Require all denied
-    <FilesMatch "^(mcp|api|admin)\.php$">
-        Require all granted
-    </FilesMatch>
 </IfModule>
 <IfModule !mod_authz_core.c>
     Order deny,allow
     Deny from all
-    <FilesMatch "^(mcp|api|admin)\.php$">
-        Allow from all
-    </FilesMatch>
+</IfModule>
+
+# Адреса без «.php» и без слэша на конце (/site.ops/mcp). Apache при запросе папки без слэша отвечает
+# редиректом 301, а клиенты MCP при редиректе теряют тело POST-запроса. Поэтому редирект отключён,
+# а все адреса без слэша обрабатываются правилами ниже. Запрос со слэшем (/site.ops/mcp/) работает и без них.
+DirectorySlash Off
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /site.ops/
+
+    # Заголовок Authorization иначе не доходит до PHP на Apache с FastCGI/CGI.
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    RewriteRule ^(mcp|api|admin)/?$ $1/index.php [L]
+    RewriteRule ^oauth/(authorize|token|register|revoke)/?$ oauth/$1/index.php [L]
+    RewriteRule ^oauth/\.well-known/(oauth-authorization-server|openid-configuration|oauth-protected-resource)/?$ oauth/.well-known/$1/index.php [L]
 </IfModule>

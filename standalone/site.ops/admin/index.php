@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-// Страница настроек: https://ваш-сайт/site.ops/admin.php (только администратор Битрикса)
+// Страница настроек: https://ваш-сайт/site.ops/admin (только администратор Битрикса)
 require $_SERVER['DOCUMENT_ROOT'] . '/bitrix/modules/main/include/prolog_admin_before.php';
-require __DIR__ . '/autoload.php';
+require __DIR__ . '/../autoload.php';
 
 global $APPLICATION, $USER;
 if (!$USER->IsAdmin()) {
@@ -12,4 +12,4 @@ if (!$USER->IsAdmin()) {
 }
 
 $siteops = \OrgBox\SiteOps\Bootstrap::standalone();
-require __DIR__ . '/lib/OrgBox/SiteOps/Admin/settings.view.php';
+require __DIR__ . '/../lib/OrgBox/SiteOps/Admin/settings.view.php';

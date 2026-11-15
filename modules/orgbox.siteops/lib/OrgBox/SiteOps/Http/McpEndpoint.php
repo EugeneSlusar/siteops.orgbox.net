@@ -19,6 +19,8 @@ final class McpEndpoint
         private RequestGuard $guard,
         private BearerTokenAuthenticator $auth,
         private McpServer $server,
+        /** Адрес документа с описанием защиты ресурса (RFC 9728); передаётся клиенту в WWW-Authenticate. */
+        private ?string $resourceMetadataUrl = null,
     ) {
     }
 
@@ -39,7 +41,8 @@ final class McpEndpoint
         } catch (AuthException $exception) {
             $headers = $common;
             if ($exception->httpStatus() === 401) {
-                $headers['WWW-Authenticate'] = 'Bearer realm="orgbox-siteops"';
+                $headers['WWW-Authenticate'] = 'Bearer realm="orgbox-siteops"'
+                    . ($this->resourceMetadataUrl !== null ? ', resource_metadata="' . $this->resourceMetadataUrl . '"' : '');
             }
 
             return HttpResponse::json($exception->httpStatus(), ['error' => $exception->getMessage()], $headers);

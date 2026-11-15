@@ -19,6 +19,18 @@ final class Settings
         return $this->store->get('mcp_enabled', 'N') === 'Y';
     }
 
+    /** Подключение клиентов через OAuth (ссылка и согласие администратора). */
+    public function oauthEnabled(): bool
+    {
+        return $this->store->get('oauth_enabled', 'N') === 'Y';
+    }
+
+    /** Адрес сайта для OAuth-документов, например https://shop.example. Пусто — берётся из запроса. */
+    public function publicUrl(): string
+    {
+        return rtrim($this->store->get('public_url', ''), '/');
+    }
+
     public function apiEnabled(): bool
     {
         return $this->store->get('api_enabled', 'N') === 'Y';
