@@ -217,3 +217,35 @@ test('согласие: если OAuth выключен, страница нед
         assertSame([], $store->codes);
     });
 });
+
+/** Запускает страницу в отдельном процессе на верхнем уровне скрипта. @return array{code:int,out:string} */
+function runAtGlobalScope(string $which): array
+{
+    $dir = tempDir();
+    mkdir($dir . '/site.ops', 0755, true);
+    $docroot = $dir . '/doc';
+    mkdir($docroot, 0755, true);
+    try {
+        exec('php ' . escapeshellarg(__DIR__ . '/fixtures/global_scope.php') . ' ' . escapeshellarg($which) . ' ' . escapeshellarg($dir . '/site.ops') . ' ' . escapeshellarg($docroot) . ' 2>&1', $lines, $code);
+
+        return ['code' => $code, 'out' => implode("\n", $lines)];
+    } finally {
+        removeDir($dir);
+    }
+}
+
+test('страница согласия работает при подключении пролога Битрикса из глобальной области (как в настоящей точке входа)', function (): void {
+    $r = runAtGlobalScope('authorize');
+    assertSame(0, $r['code'], $r['out']);
+    assertTrue(!str_contains($r['out'], 'Fatal') && !str_contains($r['out'], 'Undefined variable'), $r['out']);
+    assertContains('[ADMIN-PROLOG]', $r['out']);
+    assertContains('Разрешить', $r['out'], 'страница согласия показана');
+    assertContains('[ADMIN-EPILOG]', $r['out']);
+});
+
+test('страница настроек работает при подключении пролога Битрикса из глобальной области', function (): void {
+    $r = runAtGlobalScope('settings');
+    assertSame(0, $r['code'], $r['out']);
+    assertContains('[ADMIN-PROLOG]', $r['out']);
+    assertContains('Сохранить', $r['out']);
+});

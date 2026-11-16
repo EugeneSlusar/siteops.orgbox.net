@@ -48,59 +48,59 @@ $csrfDiagnosis = static fn (): string => 'в форме sessid Битрикса:
     . '; поле защиты форм: ' . (isset($_POST[Csrf::FIELD]) ? 'да' : 'нет');
 
 
-$page = static function (string $title, string $html) use ($APPLICATION, $siteops): void {
-    require $_SERVER['DOCUMENT_ROOT'] . '/bitrix/modules/main/include/prolog_admin_after.php';
-    $APPLICATION->SetTitle($title);
-    echo $html;
-    require $_SERVER['DOCUMENT_ROOT'] . '/bitrix/modules/main/include/epilog_admin.php';
-    $siteops->finish();
-};
+/**
+ * Вся логика решения: что показать пользователю или куда перенаправить. Здесь НЕТ подключения файлов Битрикса:
+ * prolog_admin_after.php и epilog_admin.php обязаны подключаться из глобальной области (они используют глобальные переменные
+ * админки), а не из функции, поэтому вывод делается ниже, на верхнем уровне файла.
+ *
+ * @return array{status:int,title:string,html:string}
+ */
+$outcome = (static function () use ($siteops, $settings, $csrfPassed, $csrfDiagnosis, $csrfFields, $h): array {
+    global $USER;
 
-if (!$siteops->oauthAvailable() || !$settings->mcpEnabled() || !$settings->oauthEnabled()) {
-    http_response_code(404);
-    $page('Подключение недоступно', '<p>Подключение через OAuth выключено в настройках orgBox SiteOps.</p>');
-}
-
-$oauth = $siteops->oauthServer();
-try {
-    $request = $oauth->validateAuthorizationRequest($_GET);
-} catch (AuthorizeException $exception) {
-    $back = $oauth->errorRedirect($exception);
-    if ($back !== null) {
-        $siteops->redirect($back);
+    if (!$siteops->oauthAvailable() || !$settings->mcpEnabled() || !$settings->oauthEnabled()) {
+        return ['status' => 404, 'title' => 'Подключение недоступно', 'html' => '<p>Подключение через OAuth выключено в настройках orgBox SiteOps.</p>'];
     }
-    http_response_code(400);
-    $page('Ошибка подключения', '<p>' . $h($exception->getMessage()) . '</p>');
-}
 
-$client = $request['client'];
-$host = (string) (parse_url($request['redirect_uri'], PHP_URL_HOST) ?: '');
+    $oauth = $siteops->oauthServer();
+    try {
+        $request = $oauth->validateAuthorizationRequest($_GET);
+    } catch (AuthorizeException $exception) {
+        $back = $oauth->errorRedirect($exception);
+        if ($back !== null) {
+            $siteops->redirect($back);
+        }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$csrfPassed()) {
-    http_response_code(400);
-    $page('Подключение не подтверждено', '<p>Не прошла проверка безопасности формы: доступ не выдан. Откройте ссылку подключения заново. (' . $h($csrfDiagnosis()) . ')</p>');
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $decision = (string) ($_POST['decision'] ?? '');
-    if ($decision === 'allow') {
-        (new BitrixAuditLogger())->log('oauth.approve', [
-            'client_id' => $client['client_id'], 'client_name' => $client['name'], 'redirect_host' => $host, 'user_id' => (int) $USER->GetID(),
-        ]);
-        $siteops->redirect($oauth->approve($request, (int) $USER->GetID()));
+        return ['status' => 400, 'title' => 'Ошибка подключения', 'html' => '<p>' . $h($exception->getMessage()) . '</p>'];
     }
-    if ($decision === 'deny') {
-        $siteops->redirect($oauth->deny($request));
+
+    $client = $request['client'];
+    $host = (string) (parse_url($request['redirect_uri'], PHP_URL_HOST) ?: '');
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$csrfPassed()) {
+        return ['status' => 400, 'title' => 'Подключение не подтверждено', 'html' => '<p>Не прошла проверка безопасности формы: доступ не выдан. Откройте ссылку подключения заново. (' . $h($csrfDiagnosis()) . ')</p>'];
     }
-}
 
-$mode = $settings->writesEnabled() ? 'чтение и запись' : 'только чтение';
-$iblocks = $settings->allowedIblocks();
-$scope = $iblocks === [] ? 'все инфоблоки (запись запрещена)' : 'инфоблоки ' . implode(', ', $iblocks);
-$action = (string) $_SERVER['REQUEST_URI'];
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $decision = (string) ($_POST['decision'] ?? '');
+        if ($decision === 'allow') {
+            (new BitrixAuditLogger())->log('oauth.approve', [
+                'client_id' => $client['client_id'], 'client_name' => $client['name'], 'redirect_host' => $host, 'user_id' => (int) $USER->GetID(),
+            ]);
+            $siteops->redirect($oauth->approve($request, (int) $USER->GetID()));
+        }
+        if ($decision === 'deny') {
+            $siteops->redirect($oauth->deny($request));
+        }
+    }
 
-ob_start();
-?>
+    $mode = $settings->writesEnabled() ? 'чтение и запись' : 'только чтение';
+    $iblocks = $settings->allowedIblocks();
+    $scope = $iblocks === [] ? 'все инфоблоки (запись запрещена)' : 'инфоблоки ' . implode(', ', $iblocks);
+    $action = (string) $_SERVER['REQUEST_URI'];
+
+    ob_start();
+    ?>
 <div style="max-width:640px">
     <p><b><?=$h($client['name'])?></b> просит доступ к данным этого сайта через MCP.</p>
     <table class="adm-detail-content-table edit-table">
@@ -119,4 +119,14 @@ ob_start();
     </form>
 </div>
 <?php
-$page('Подключение ИИ-ассистента', (string) ob_get_clean());
+
+    return ['status' => 200, 'title' => 'Подключение ИИ-ассистента', 'html' => (string) ob_get_clean()];
+})();
+
+// Вывод страницы: на верхнем уровне файла, то есть в глобальной области, как этого требует административный пролог Битрикса.
+http_response_code($outcome['status']);
+require $_SERVER['DOCUMENT_ROOT'] . '/bitrix/modules/main/include/prolog_admin_after.php';
+$APPLICATION->SetTitle($outcome['title']);
+echo $outcome['html'];
+require $_SERVER['DOCUMENT_ROOT'] . '/bitrix/modules/main/include/epilog_admin.php';
+$siteops->finish();
