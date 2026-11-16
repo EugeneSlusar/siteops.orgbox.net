@@ -21,8 +21,13 @@ use OrgBox\SiteOps\OAuth\BitrixOAuthStore;
 use OrgBox\SiteOps\OAuth\OAuthServer;
 use OrgBox\SiteOps\OAuth\OAuthStore;
 use OrgBox\SiteOps\Tools\IblockToolset;
+use OrgBox\SiteOps\Update\CurlHttpClient;
+use OrgBox\SiteOps\Update\HttpClient;
 use OrgBox\SiteOps\Update\ModuleInfo;
 use OrgBox\SiteOps\Update\PackageProfile;
+use OrgBox\SiteOps\Update\ReleaseVerifier;
+use OrgBox\SiteOps\Update\Updater;
+use OrgBox\SiteOps\Update\ZipInstaller;
 
 /**
  * Сборка объектов внутри Битрикса. Две формы установки с одним и тем же кодом:
@@ -39,6 +44,8 @@ final class Bootstrap
         private ?OAuthStore $oauthStoreOverride = null,
         /** @var (callable(?string):never)|null вызывается вместо header/exit: получает адрес редиректа или null при простом завершении */
         private $exitHook = null,
+        /** Подмена HTTP-клиента обновлений (для тестов). */
+        private ?HttpClient $httpOverride = null,
     ) {
     }
 
@@ -49,9 +56,9 @@ final class Bootstrap
     }
 
     /** Папка site.ops в корне сайта; настройки лежат в ней же. */
-    public static function standalone(?string $baseDir = null, ?OptionStore $store = null, ?OAuthStore $oauthStore = null, ?callable $exitHook = null): self
+    public static function standalone(?string $baseDir = null, ?OptionStore $store = null, ?OAuthStore $oauthStore = null, ?callable $exitHook = null, ?HttpClient $http = null): self
     {
-        return new self(PackageProfile::standalone(), $baseDir ?? dirname(__DIR__, 3), $store, $oauthStore, $exitHook);
+        return new self(PackageProfile::standalone(), $baseDir ?? dirname(__DIR__, 3), $store, $oauthStore, $exitHook, $http);
     }
 
     /** Редирект и завершение запроса. В тестах подменяется. */
@@ -128,6 +135,31 @@ final class Bootstrap
         return $this->isStandalone()
             ? $this->baseDir . '/_updates'
             : $_SERVER['DOCUMENT_ROOT'] . '/upload/orgbox_siteops/updates';
+    }
+
+    /** Обновление из GitHub Releases для текущей формы установки. */
+    public function updater(Settings $settings): Updater
+    {
+        $afterApply = null;
+        if (!$this->isStandalone()) {
+            // Формальный модуль: обновить копии страницы админки и точек входа, лежащие вне папки модуля.
+            $afterApply = static function (string $dir): void {
+                CopyDirFiles($dir . '/install/admin', $_SERVER['DOCUMENT_ROOT'] . '/bitrix/admin', true, true);
+                CopyDirFiles($dir . '/install/tools', $_SERVER['DOCUMENT_ROOT'] . '/bitrix/tools', true, true);
+            };
+        }
+
+        return new Updater(
+            $this->httpOverride ?? new CurlHttpClient(),
+            new ReleaseVerifier($settings->updatePublicKey(), $settings->allowUnsignedUpdates()),
+            new ZipInstaller($this->profile, $afterApply),
+            $this->profile,
+            $settings->updateRepository(),
+            $settings->updateGithubToken(),
+            $this->baseDir,
+            $this->workDir(),
+            $this->version(),
+        );
     }
 
     public function tools(Settings $settings): ToolRegistry

@@ -8,10 +8,14 @@ use OrgBox\SiteOps\Admin\Csrf;
 use OrgBox\SiteOps\Bootstrap;
 use OrgBox\SiteOps\Config\FileOptionStore;
 use OrgBox\SiteOps\Config\Settings;
+use OrgBox\SiteOps\OAuth\OAuthStore;
+use OrgBox\SiteOps\Update\HttpClient;
+use Tests\Support\MemoryOAuthStore;
+use Tests\Support\FakeHttp;
 use OrgBox\SiteOps\Config\OptionStore;
 
 /** Прогоняет страницу настроек site.ops и возвращает HTML. */
-function renderAdmin(string $base, string $method = 'GET', array $post = [], bool $sessid = true, ?OptionStore $store = null, array $cookies = []): string
+function renderAdmin(string $base, string $method = 'GET', array $post = [], bool $sessid = true, ?OptionStore $store = null, array $cookies = [], ?HttpClient $http = null, ?OAuthStore $oauthStore = null): string
 {
     $docroot = tempDir();
     mkdir($docroot . '/bitrix/modules/main/include', 0755, true);
@@ -28,7 +32,7 @@ function renderAdmin(string $base, string $method = 'GET', array $post = [], boo
     $GLOBALS['__sessid_ok'] = $sessid;
     $GLOBALS['APPLICATION'] = new TestApplication();
     $GLOBALS['USER'] = new TestUser();
-    $siteops = Bootstrap::standalone($base, $store);
+    $siteops = Bootstrap::standalone($base, $store, $oauthStore, null, $http);
 
     ob_start();
     try {
@@ -287,4 +291,220 @@ test('Csrf: выдача, проверка, повторное использо�
     assertTrue(!$csrf->verify(null, $a['field']) && !$csrf->verify($a['cookie'], null) && !$csrf->verify([$a['cookie']], $a['field']));
     assertTrue(!(new Csrf('другой'))->verify($a['cookie'], $a['field']), 'другой секрет');
     assertTrue($csrf->issue('не-hex')['cookie'] !== 'не-hex', 'недопустимая cookie заменяется новой');
+});
+
+// ---- обновление со страницы настроек ----------------------------------------------------------
+
+/** Установленный site.ops старой версии: version.php рядом, чтобы страница знала текущую версию. */
+function withInstalledSite(callable $body, string $version = '0.0.1'): void
+{
+    withSite(function (string $base) use ($body, $version): void {
+        file_put_contents($base . '/version.php', "<?php\n\$arModuleVersion = ['VERSION' => '$version', 'VERSION_DATE' => '2026-01-01 00:00:00'];\n");
+        file_put_contents($base . '/autoload.php', '<?php // old');
+        file_put_contents($base . '/.htaccess', '# old');
+        mkdir($base . '/lib', 0755, true);
+        $GLOBALS['_SESSION'] = [];
+        $body($base);
+    });
+}
+
+/**
+ * Публичный релиз на «GitHub»: ответы API и файлы настоящего собранного архива site.ops.
+ * @return array{0:FakeHttp,1:string,2:string} заглушка, версия релиза, содержимое архива
+ */
+function fakeRelease(?string $signWith = null): array
+{
+    $out = buildRelease();
+    $version = releaseVersion();
+    $zip = (string) file_get_contents($out . "/site.ops-$version.zip");
+    $name = "site.ops-$version.zip";
+    $asset = static fn (string $n): array => ['name' => $n, 'browser_download_url' => "https://github.com/o/r/releases/download/v$version/$n"];
+    $assets = [$asset($name), $asset($name . '.sha256')];
+    $files = [
+        "https://github.com/o/r/releases/download/v$version/$name" => $zip,
+        "https://github.com/o/r/releases/download/v$version/$name.sha256" => hash('sha256', $zip) . "  $name\n",
+    ];
+    if ($signWith !== null) {
+        $assets[] = $asset($name . '.sig');
+        $files["https://github.com/o/r/releases/download/v$version/$name.sig"] = base64_encode(sodium_crypto_sign_detached($zip, $signWith)) . "\n";
+    }
+    removeDir($out);
+
+    return [new FakeHttp(['https://api.github.com/repos/o/r/releases/latest' => json_encode(['tag_name' => 'v' . $version, 'body' => 'Что нового', 'assets' => $assets])] + $files), $version, $zip];
+}
+
+function postUpdate(string $base, string $action, ?HttpClient $http, array $extra = []): string
+{
+    [$cookies, $field] = csrfPair($base);
+
+    return renderAdmin($base, 'POST', ['action' => $action] + $field + $extra, false, null, $cookies, $http);
+}
+
+test('обновление: «Проверить обновления» находит новую версию и показывает кнопку установки (раньше страница падала с ошибкой конструктора)', function (): void {
+    withInstalledSite(function (string $base): void {
+        [$http, $version] = fakeRelease();
+        renderAdmin($base);
+        $settings = new Settings(new FileOptionStore($base . '/_data/settings.php'));
+        $settings->store()->set('update_repo', 'o/r');
+        $html = postUpdate($base, 'check', $http);
+        assertTrue(!str_contains($html, 'Ошибка:'), 'страница не должна падать: ' . substr(strip_tags($html), 0, 200));
+        assertContains('Доступна версия ' . $version, $html);
+        assertContains('Установить ' . $version, $html);
+        assertContains('Что нового', $html);
+    });
+});
+
+test('обновление: если установлена последняя версия, страница так и говорит', function (): void {
+    withInstalledSite(function (string $base): void {
+        [$http, $version] = fakeRelease();
+        renderAdmin($base);
+        (new Settings(new FileOptionStore($base . '/_data/settings.php')))->store()->set('update_repo', 'o/r');
+        $html = postUpdate($base, 'check', $http);
+        file_put_contents($base . '/version.php', "<?php\n\$arModuleVersion = ['VERSION' => '$version', 'VERSION_DATE' => 'x'];\n");
+        $html = postUpdate($base, 'check', $http);
+        assertContains('Установлена последняя версия (' . $version . ')', $html);
+        assertTrue(!str_contains($html, 'Установить '), 'кнопки установки нет');
+    }, '0.0.1');
+});
+
+test('обновление: ошибка сети показывается сообщением, а не падением страницы', function (): void {
+    withInstalledSite(function (string $base): void {
+        renderAdmin($base);
+        $html = postUpdate($base, 'check', new FakeHttp([]));
+        assertContains('MSG ERROR', $html);
+        assertTrue(!str_contains($html, 'Fatal'), 'без фатальной ошибки');
+        assertContains('Сохранить', $html, 'страница отрисована целиком');
+    });
+});
+
+test('обновление: без проверки сначала установить нельзя', function (): void {
+    withInstalledSite(function (string $base): void {
+        renderAdmin($base);
+        $html = postUpdate($base, 'update', new FakeHttp([]));
+        assertContains('Сначала нажмите «Проверить обновления»', $html);
+    });
+});
+
+test('обновление: без ключа подписи и без разрешения «без подписи» установка отклоняется, файлы не тронуты', function (): void {
+    withInstalledSite(function (string $base): void {
+        [$http] = fakeRelease();
+        renderAdmin($base);
+        (new Settings(new FileOptionStore($base . '/_data/settings.php')))->store()->set('update_repo', 'o/r');
+        postUpdate($base, 'check', $http);
+        $html = postUpdate($base, 'update', $http);
+        assertContains('Не задан открытый ключ', $html);
+        assertContains("'0.0.1'", (string) file_get_contents($base . '/version.php'), 'версия не изменилась');
+        assertSame('<?php // old', (string) file_get_contents($base . '/autoload.php'));
+    });
+});
+
+test('обновление: с разрешением «без подписи» устанавливается по SHA-256, настройки (_data) целы', function (): void {
+    withInstalledSite(function (string $base): void {
+        [$http, $version] = fakeRelease();
+        renderAdmin($base);
+        $store = new FileOptionStore($base . '/_data/settings.php');
+        $store->set('update_repo', 'o/r');
+        $store->set('update_allow_unsigned', 'Y');
+        $store->set('mcp_enabled', 'Y');
+        postUpdate($base, 'check', $http);
+        $html = postUpdate($base, 'update', $http);
+        assertContains('Установлена версия ' . $version, $html);
+        assertContains('только SHA-256', $html);
+        assertContains("'$version'", (string) file_get_contents($base . '/version.php'));
+        assertTrue(is_file($base . '/mcp/index.php') && is_file($base . '/lib/OrgBox/SiteOps/Bootstrap.php'), 'новые файлы на месте');
+        assertSame('Y', (new FileOptionStore($base . '/_data/settings.php'))->get('mcp_enabled'), 'настройки сохранились');
+    });
+});
+
+test('обновление: с настроенным ключом принимается только подписанный релиз', function (): void {
+    withInstalledSite(function (string $base): void {
+        $pair = sodium_crypto_sign_keypair();
+        [$http, $version] = fakeRelease(sodium_crypto_sign_secretkey($pair));
+        renderAdmin($base);
+        $store = new FileOptionStore($base . '/_data/settings.php');
+        $store->set('update_repo', 'o/r');
+        $store->set('update_public_key', base64_encode(sodium_crypto_sign_publickey($pair)));
+        postUpdate($base, 'check', $http);
+        $html = postUpdate($base, 'update', $http);
+        assertContains('подпись и SHA-256', $html);
+        assertContains("'$version'", (string) file_get_contents($base . '/version.php'));
+    });
+});
+
+test('обновление: подпись чужим ключом отклоняется, установка не происходит', function (): void {
+    withInstalledSite(function (string $base): void {
+        [$http] = fakeRelease(sodium_crypto_sign_secretkey(sodium_crypto_sign_keypair()));
+        renderAdmin($base);
+        $store = new FileOptionStore($base . '/_data/settings.php');
+        $store->set('update_repo', 'o/r');
+        $store->set('update_public_key', base64_encode(sodium_crypto_sign_publickey(sodium_crypto_sign_keypair())));
+        postUpdate($base, 'check', $http);
+        $html = postUpdate($base, 'update', $http);
+        assertContains('Подпись релиза недействительна', $html);
+        assertContains("'0.0.1'", (string) file_get_contents($base . '/version.php'));
+    });
+});
+
+// ---- список OAuth-подключений и отзыв --------------------------------------------------------
+
+function storeWithConnection(string $name = 'Claude Code'): MemoryOAuthStore
+{
+    $store = new MemoryOAuthStore();
+    $store->saveClient(['client_id' => 'sopc_1', 'name' => $name, 'redirect_uris' => ['http://localhost:7777/callback'], 'created' => time() - 3600]);
+    $store->saveToken(['hash' => 'rt', 'type' => 'refresh', 'client_id' => 'sopc_1', 'user_id' => 1, 'family' => 'f', 'expires' => time() + 86400, 'revoked' => false, 'created' => time() - 60]);
+
+    return $store;
+}
+
+test('подключения OAuth: список показывает клиента и адрес возврата, имя экранируется', function (): void {
+    withSite(function (string $base): void {
+        (new Settings(new FileOptionStore($base . '/_data/settings.php')))->store()->set('mcp_enabled', 'Y');
+        (new Settings(new FileOptionStore($base . '/_data/settings.php')))->store()->set('oauth_enabled', 'Y');
+        $html = renderAdmin($base, 'GET', [], true, null, [], null, storeWithConnection('<b>Evil</b>'));
+        assertContains('Подключения (OAuth)', $html);
+        assertContains('localhost', $html);
+        assertContains('&lt;b&gt;Evil&lt;/b&gt;', $html);
+        assertTrue(!str_contains($html, '<b>Evil</b>'), 'имя клиента не экранировано');
+        assertContains('value="revoke_client"', $html);
+        assertTrue(!str_contains($html, 'Активных подключений нет'));
+    });
+});
+
+test('подключения OAuth: без подключений так и написано', function (): void {
+    withSite(function (string $base): void {
+        $store = new FileOptionStore($base . '/_data/settings.php');
+        $store->set('mcp_enabled', 'Y');
+        $store->set('oauth_enabled', 'Y');
+        assertContains('Активных подключений нет', renderAdmin($base, 'GET', [], true, null, [], null, new MemoryOAuthStore()));
+    });
+});
+
+test('подключения OAuth: «Отозвать» убирает подключение, закрывает токены и пишет в журнал событий', function (): void {
+    withSite(function (string $base): void {
+        $settings = new FileOptionStore($base . '/_data/settings.php');
+        $settings->set('mcp_enabled', 'Y');
+        $settings->set('oauth_enabled', 'Y');
+        $oauthStore = storeWithConnection();
+        renderAdmin($base, 'GET', [], true, null, [], null, $oauthStore);
+        [$cookies, $field] = csrfPair($base);
+        CEventLog::$entries = [];
+        $html = renderAdmin($base, 'POST', ['action' => 'revoke_client', 'client_id' => 'sopc_1'] + $field, false, null, $cookies, null, $oauthStore);
+        assertContains('Подключение отозвано', $html);
+        assertSame([], $oauthStore->listConnections(time()), 'подключений не осталось');
+        assertTrue($oauthStore->getToken('rt')['revoked'], 'токен отозван');
+        assertTrue($oauthStore->getClient('sopc_1') === null, 'клиент удалён');
+        assertTrue(array_filter(CEventLog::$entries, static fn ($e) => ($e['ITEM_ID'] ?? '') === 'oauth.revoke_client') !== [], 'отзыв записан в журнал событий');
+    });
+});
+
+test('подключения OAuth: без защиты формы отозвать нельзя', function (): void {
+    withSite(function (string $base): void {
+        $settings = new FileOptionStore($base . '/_data/settings.php');
+        $settings->set('mcp_enabled', 'Y');
+        $settings->set('oauth_enabled', 'Y');
+        $oauthStore = storeWithConnection();
+        $html = renderAdmin($base, 'POST', ['action' => 'revoke_client', 'client_id' => 'sopc_1'], false, null, [], null, $oauthStore);
+        assertContains('Не прошла проверка безопасности формы', $html);
+        assertSame(1, count($oauthStore->listConnections(time())), 'подключение осталось');
+    });
 });

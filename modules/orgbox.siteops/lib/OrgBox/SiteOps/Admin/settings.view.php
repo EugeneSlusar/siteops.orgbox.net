@@ -11,11 +11,8 @@ declare(strict_types=1);
 use OrgBox\SiteOps\Admin\Csrf;
 use OrgBox\SiteOps\Bootstrap;
 use OrgBox\SiteOps\Config\Settings;
-use OrgBox\SiteOps\Update\CurlHttpClient;
-use OrgBox\SiteOps\Update\ReleaseVerifier;
 use OrgBox\SiteOps\Update\Updater;
 use OrgBox\SiteOps\Update\UpdateException;
-use OrgBox\SiteOps\Update\ZipInstaller;
 
 /** @var Bootstrap $siteops */
 global $APPLICATION;
@@ -47,28 +44,7 @@ $newToken = '';
 $release = null;
 
 $h = static fn (string $value): string => htmlspecialcharsbx($value);
-$makeUpdater = static function () use ($settings, $siteops): Updater {
-    $verifier = new ReleaseVerifier($settings->updatePublicKey(), $settings->allowUnsignedUpdates());
-    $afterApply = null;
-    if (!$siteops->isStandalone()) {
-        // Формальный модуль: обновить копии страниц админки и точек входа, лежащие вне папки модуля.
-        $afterApply = static function (string $dir): void {
-            CopyDirFiles($dir . '/install/admin', $_SERVER['DOCUMENT_ROOT'] . '/bitrix/admin', true, true);
-            CopyDirFiles($dir . '/install/tools', $_SERVER['DOCUMENT_ROOT'] . '/bitrix/tools', true, true);
-        };
-    }
-
-    return new Updater(
-        new CurlHttpClient(),
-        $verifier,
-        new ZipInstaller($siteops->profile(), $afterApply),
-        $settings->updateRepository(),
-        $settings->updateGithubToken(),
-        $siteops->baseDir(),
-        $siteops->workDir(),
-        $siteops->version(),
-    );
-};
+$makeUpdater = static fn (): Updater => $siteops->updater($settings);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$csrfPassed()) {
     $messages[] = ['ERROR', 'Не прошла проверка безопасности формы: настройки НЕ сохранены. Обновите страницу (Ctrl+F5) и повторите. Если повторяется, пришлите это сообщение разработчику (' . $csrfDiagnosis() . ').'];
