@@ -139,16 +139,17 @@ final class BitrixIblockGateway implements IblockGateway
             ['ID', 'IBLOCK_ID', 'NAME', 'CODE', 'ACTIVE', 'SORT', 'IBLOCK_SECTION_ID', 'TIMESTAMP_X', 'DETAIL_PAGE_URL'],
         );
         $items = [];
-        while ($row = $rows->GetNext(false, false)) {
+        // GetNext(true, true): экранированные значения для HTML + исходные в полях с префиксом «~» (их и берём).
+        while ($row = $rows->GetNext(true, true)) {
             $items[] = [
                 'id' => (int) $row['ID'],
                 'iblock_id' => (int) $row['IBLOCK_ID'],
-                'name' => (string) $row['NAME'],
-                'code' => (string) $row['CODE'],
-                'active' => $row['ACTIVE'] === 'Y',
+                'name' => RawRow::string($row, 'NAME'),
+                'code' => RawRow::string($row, 'CODE'),
+                'active' => RawRow::string($row, 'ACTIVE') === 'Y',
                 'sort' => (int) $row['SORT'],
                 'section_id' => (int) $row['IBLOCK_SECTION_ID'],
-                'modified' => (string) $row['TIMESTAMP_X'],
+                'modified' => RawRow::string($row, 'TIMESTAMP_X'),
                 'url' => (string) $row['DETAIL_PAGE_URL'],
             ];
         }
@@ -164,7 +165,7 @@ final class BitrixIblockGateway implements IblockGateway
             false,
             false,
             ['ID', 'IBLOCK_ID', 'NAME', 'CODE', 'ACTIVE', 'SORT', 'IBLOCK_SECTION_ID', 'PREVIEW_TEXT', 'PREVIEW_TEXT_TYPE', 'DETAIL_TEXT', 'DETAIL_TEXT_TYPE', 'TIMESTAMP_X', 'DETAIL_PAGE_URL'],
-        )->GetNext(false, false);
+        )->GetNext(true, true);
         if (!$row) {
             return null;
         }
@@ -188,16 +189,16 @@ final class BitrixIblockGateway implements IblockGateway
         return [
             'id' => (int) $row['ID'],
             'iblock_id' => (int) $row['IBLOCK_ID'],
-            'name' => (string) $row['NAME'],
-            'code' => (string) $row['CODE'],
-            'active' => $row['ACTIVE'] === 'Y',
+            'name' => RawRow::string($row, 'NAME'),
+            'code' => RawRow::string($row, 'CODE'),
+            'active' => RawRow::string($row, 'ACTIVE') === 'Y',
             'sort' => (int) $row['SORT'],
             'section_id' => (int) $row['IBLOCK_SECTION_ID'],
-            'preview_text' => (string) $row['PREVIEW_TEXT'],
-            'preview_text_type' => (string) $row['PREVIEW_TEXT_TYPE'],
-            'detail_text' => (string) $row['DETAIL_TEXT'],
-            'detail_text_type' => (string) $row['DETAIL_TEXT_TYPE'],
-            'modified' => (string) $row['TIMESTAMP_X'],
+            'preview_text' => RawRow::string($row, 'PREVIEW_TEXT'),
+            'preview_text_type' => RawRow::string($row, 'PREVIEW_TEXT_TYPE'),
+            'detail_text' => RawRow::string($row, 'DETAIL_TEXT'),
+            'detail_text_type' => RawRow::string($row, 'DETAIL_TEXT_TYPE'),
+            'modified' => RawRow::string($row, 'TIMESTAMP_X'),
             'url' => (string) $row['DETAIL_PAGE_URL'],
             'properties' => $properties,
         ];

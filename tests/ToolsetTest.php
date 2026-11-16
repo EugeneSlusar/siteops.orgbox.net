@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use OrgBox\SiteOps\Config\Settings;
+use OrgBox\SiteOps\Iblock\RawRow;
 use OrgBox\SiteOps\Mcp\McpServer;
 use OrgBox\SiteOps\Mcp\ToolRegistry;
 use OrgBox\SiteOps\Tools\IblockToolset;
@@ -219,4 +220,19 @@ test('нет инструмента удаления: ни в одном реж�
     foreach (array_column($tools, 'name') as $name) {
         assertTrue(!preg_match('/delete|remove|drop|destroy/i', $name), $name);
     }
+});
+
+test('RawRow: берутся исходные значения (~поле), а не экранированные, как возвращает GetNext(true, true)', function (): void {
+    // Так выглядит строка после CDBResult::GetNext(true, true): текстовые поля экранированы, исходные лежат в ~ПОЛЕ.
+    $row = [
+        'NAME' => 'Лак &quot;Берёзка&quot; &amp; Ко', '~NAME' => 'Лак "Берёзка" & Ко',
+        'DETAIL_TEXT' => '&lt;p&gt;Текст&lt;/p&gt;', '~DETAIL_TEXT' => '<p>Текст</p>',
+        'SORT' => '500', '~SORT' => '500', 'ID' => '7',
+    ];
+    assertSame('Лак "Берёзка" & Ко', RawRow::string($row, 'NAME'));
+    assertSame('<p>Текст</p>', RawRow::string($row, 'DETAIL_TEXT'));
+    assertSame('500', RawRow::string($row, 'SORT'));
+    assertSame('7', RawRow::string($row, 'ID'), 'без ~-копии берётся само поле (значения без экранирования, как из Fetch)');
+    assertSame('', RawRow::string($row, 'НЕТ_ТАКОГО'));
+    assertSame('', RawRow::string(['X' => ['массив']], 'X'), 'нескалярное значение не превращается в мусор');
 });
