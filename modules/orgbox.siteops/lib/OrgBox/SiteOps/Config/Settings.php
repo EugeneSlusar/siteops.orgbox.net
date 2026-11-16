@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace OrgBox\SiteOps\Config;
 
-/** Типизированный доступ к настройкам. Секреты в открытом виде не хранятся, кроме HMAC-секрета старого API. */
+/** Типизированный доступ к настройкам. Секреты (токены, коды) в открытом виде не хранятся. */
 final class Settings
 {
     public const MODE_READONLY = 'readonly';
@@ -29,11 +29,6 @@ final class Settings
     public function publicUrl(): string
     {
         return rtrim($this->store->get('public_url', ''), '/');
-    }
-
-    public function apiEnabled(): bool
-    {
-        return $this->store->get('api_enabled', 'N') === 'Y';
     }
 
     public function mode(): string
@@ -88,21 +83,6 @@ final class Settings
     public function rateLimitPerMinute(): int
     {
         return max(1, min(1000, (int) $this->store->get('rate_limit', '60')));
-    }
-
-    public function defaultIblockId(): int
-    {
-        return max(0, (int) $this->store->get('default_iblock_id', '0'));
-    }
-
-    public function apiKeyId(): string
-    {
-        return $this->store->get('api_key_id', 'siteops');
-    }
-
-    public function apiSecret(): string
-    {
-        return $this->store->get('api_secret', '');
     }
 
     public function updateRepository(): string

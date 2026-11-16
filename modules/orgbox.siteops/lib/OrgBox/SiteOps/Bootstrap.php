@@ -6,11 +6,8 @@ namespace OrgBox\SiteOps;
 
 use OrgBox\SiteOps\Audit\BitrixAuditLogger;
 use OrgBox\SiteOps\Auth\BearerTokenAuthenticator;
-use OrgBox\SiteOps\Auth\BitrixNonceStore;
-use OrgBox\SiteOps\Auth\HmacAuthenticator;
 use OrgBox\SiteOps\Config\BitrixOptionStore;
 use OrgBox\SiteOps\Config\Settings;
-use OrgBox\SiteOps\Http\ApiEndpoint;
 use OrgBox\SiteOps\Http\BitrixCounterStore;
 use OrgBox\SiteOps\Http\McpEndpoint;
 use OrgBox\SiteOps\Http\OAuthEndpoint;
@@ -149,20 +146,6 @@ final class Bootstrap
             new BearerTokenAuthenticator($settings, $oauth),
             $server,
             $oauth?->resourceMetadataUrl(),
-        );
-    }
-
-    public function apiEndpoint(): ApiEndpoint
-    {
-        $settings = $this->settings();
-        $uri = $this->isStandalone() ? '/site.ops/api.php' : '/bitrix/tools/orgbox_siteops/api.php';
-
-        return new ApiEndpoint(
-            $settings,
-            new RequestGuard($settings, new BitrixCounterStore()),
-            new HmacAuthenticator($settings, new BitrixNonceStore()),
-            $this->tools($settings),
-            $uri,
         );
     }
 }

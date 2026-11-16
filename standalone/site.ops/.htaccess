@@ -1,4 +1,4 @@
-# orgBox SiteOps: по умолчанию всё закрыто. Открыты только папки точек входа (mcp, api, admin, oauth):
+# orgBox SiteOps: по умолчанию всё закрыто. Открыты только папки точек входа (mcp, admin, oauth):
 # в каждой лежит свой .htaccess с разрешением. Код (lib/) и резервные копии (_updates/) недоступны из браузера.
 # Требуется AllowOverride All (как и для самого Битрикса).
 Options -Indexes
@@ -24,7 +24,7 @@ DirectorySlash Off
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 
-    RewriteRule ^(mcp|api|admin)/?$ $1/index.php [L]
+    RewriteRule ^(mcp|admin)/?$ $1/index.php [L]
     RewriteRule ^oauth/(authorize|token|register|revoke)/?$ oauth/$1/index.php [L]
     RewriteRule ^oauth/\.well-known/(oauth-authorization-server|openid-configuration|oauth-protected-resource)/?$ oauth/.well-known/$1/index.php [L]
 </IfModule>

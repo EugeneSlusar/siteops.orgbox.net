@@ -108,8 +108,6 @@ req POST /site.ops/mcp -H 'Content-Type: application/json' -H 'X-SiteOps-Token: 
 check "токен в X-SiteOps-Token — 200" "$([ "$CODE" = 200 ]; echo $?)"
 req GET /site.ops/mcp -H 'Authorization: Bearer sop_statictoken'
 check "GET /site.ops/mcp — 405 (только POST), не редирект" "$([ "$CODE" = 405 ] && [ -z "$LOC" ]; echo $?)"
-req POST /site.ops/api "${JSON[@]}" -d '{}'
-check "POST /site.ops/api — ответ PHP в JSON (API отключён), не редирект" "$([ -z "$LOC" ] && printf '%s' "$BODY" | grep -q '"ok":false'; echo $?)"
 req GET /site.ops/admin;            check "GET /site.ops/admin — дошло до страницы администратора" "$([ "$CODE" = 200 ] && [ "$BODY" = ADMIN-STUB ]; echo $?)"
 req GET /site.ops/admin/;           check "GET /site.ops/admin/ — то же" "$([ "$CODE" = 200 ] && [ "$BODY" = ADMIN-STUB ]; echo $?)"
 req GET '/site.ops/oauth/authorize?client_id=x'; check "GET /site.ops/oauth/authorize — дошло до страницы согласия" "$([ "$CODE" = 200 ] && [ "$BODY" = ADMIN-STUB ] && [ -z "$LOC" ]; echo $?)"

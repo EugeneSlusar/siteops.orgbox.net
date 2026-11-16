@@ -3,9 +3,7 @@
 declare(strict_types=1);
 
 use OrgBox\SiteOps\Auth\BearerTokenAuthenticator;
-use OrgBox\SiteOps\Auth\HmacAuthenticator;
 use OrgBox\SiteOps\Config\Settings;
-use OrgBox\SiteOps\Http\ApiEndpoint;
 use OrgBox\SiteOps\Http\McpEndpoint;
 use OrgBox\SiteOps\Http\RequestGuard;
 use OrgBox\SiteOps\Mcp\McpServer;
@@ -15,7 +13,6 @@ use Tests\Support\ArrayOptionStore;
 use Tests\Support\FakeGateway;
 use Tests\Support\MemoryAudit;
 use Tests\Support\MemoryCounter;
-use Tests\Support\MemoryNonces;
 
 /** @return array{0:McpEndpoint,1:Settings,2:string} */
 function makeEndpoint(array $options = []): array
@@ -131,82 +128,4 @@ test('HTTP: уведомление даёт 202 без тела', function (): v
     $r = $endpoint->handle('POST', server($token), '{"jsonrpc":"2.0","method":"notifications/initialized"}');
     assertSame(202, $r->status);
     assertSame(null, $r->body);
-});
-
-// ---- старый подписанный API ---------------------------------------------------------------------
-
-function signed(string $secret, string $body, int $ts, string $nonce, string $uri = '/bitrix/tools/orgbox_siteops/api.php'): array
-{
-    $payload = "POST\n" . $uri . "\n" . $ts . "\n" . $nonce . "\n" . hash('sha256', $body);
-
-    return [
-        'REMOTE_ADDR' => '203.0.113.5',
-        'HTTP_X_ORGBOX_KEY' => 'siteops',
-        'HTTP_X_ORGBOX_TIMESTAMP' => (string) $ts,
-        'HTTP_X_ORGBOX_NONCE' => $nonce,
-        'HTTP_X_ORGBOX_SIGNATURE' => hash_hmac('sha256', $payload, $secret),
-    ];
-}
-
-function makeApi(array $options = []): ApiEndpoint
-{
-    $settings = new Settings(new ArrayOptionStore($options + ['api_enabled' => 'Y', 'api_secret' => 'top-secret', 'default_iblock_id' => '1']));
-    $registry = new ToolRegistry();
-    (new IblockToolset(new FakeGateway(), $settings, new MemoryAudit()))->registerAll($registry);
-
-    return new ApiEndpoint(
-        $settings,
-        new RequestGuard($settings, new MemoryCounter(), 1_000_000),
-        new HmacAuthenticator($settings, new MemoryNonces(), 1_000_000),
-        $registry,
-    );
-}
-
-test('API: корректная подпись, операция seo.templates.get', function (): void {
-    $body = '{"operation":"seo.templates.get"}';
-    $r = makeApi()->handle('POST', signed('top-secret', $body, 1_000_000, 'nonce-nonce-nonce-1'), $body);
-    assertSame(200, $r->status);
-    assertContains('ELEMENT_META_TITLE', (string) $r->body);
-});
-
-test('API: неверная подпись отклоняется', function (): void {
-    $body = '{"operation":"seo.templates.get"}';
-    assertSame(401, makeApi()->handle('POST', signed('чужой-секрет', $body, 1_000_000, 'nonce-nonce-nonce-1'), $body)->status);
-});
-
-test('API: подмена тела после подписи отклоняется', function (): void {
-    $server = signed('top-secret', '{"operation":"seo.templates.get"}', 1_000_000, 'nonce-nonce-nonce-1');
-    assertSame(401, makeApi()->handle('POST', $server, '{"operation":"tools.list"}')->status);
-});
-
-test('API: просроченный запрос отклоняется', function (): void {
-    $body = '{"operation":"tools.list"}';
-    assertSame(401, makeApi()->handle('POST', signed('top-secret', $body, 1_000_000 - 301, 'nonce-nonce-nonce-1'), $body)->status);
-});
-
-test('API: повтор того же nonce отклоняется', function (): void {
-    $api = makeApi();
-    $body = '{"operation":"tools.list"}';
-    $server = signed('top-secret', $body, 1_000_000, 'nonce-nonce-nonce-1');
-    assertSame(200, $api->handle('POST', $server, $body)->status);
-    assertSame(401, $api->handle('POST', $server, $body)->status);
-});
-
-test('API: выключенный API отвечает 403', function (): void {
-    $body = '{"operation":"tools.list"}';
-    assertSame(403, makeApi(['api_enabled' => 'N'])->handle('POST', signed('top-secret', $body, 1_000_000, 'nonce-nonce-nonce-1'), $body)->status);
-});
-
-test('API: запись недоступна в режиме чтения', function (): void {
-    $body = '{"operation":"seo.templates.update","templates":{"ELEMENT_META_TITLE":"x"}}';
-    $r = makeApi()->handle('POST', signed('top-secret', $body, 1_000_000, 'nonce-nonce-nonce-1'), $body);
-    assertSame(400, $r->status);
-});
-
-test('API: tools.list в режиме чтения без инструментов записи', function (): void {
-    $body = '{"operation":"tools.list"}';
-    $r = makeApi()->handle('POST', signed('top-secret', $body, 1_000_000, 'nonce-nonce-nonce-1'), $body);
-    $names = array_column(json_decode((string) $r->body, true)['result']['tools'], 'name');
-    assertTrue(!in_array('element_update', $names, true));
-    assertTrue(in_array('element_list', $names, true));
 });

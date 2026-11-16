@@ -103,7 +103,7 @@ test('сборка: site.ops содержит точки входа, .htaccess, 
         for ($i = 0; $i < $zip->numFiles; $i++) {
             $names[] = $zip->getNameIndex($i);
         }
-        foreach (['mcp/index.php', 'api/index.php', 'admin/index.php', 'oauth/authorize/index.php', 'oauth/token/index.php', 'oauth/register/index.php', 'oauth/revoke/index.php',
+        foreach (['mcp/index.php', 'admin/index.php', 'oauth/authorize/index.php', 'oauth/token/index.php', 'oauth/register/index.php', 'oauth/revoke/index.php',
             'oauth/.well-known/oauth-authorization-server/index.php', 'oauth/.well-known/openid-configuration/index.php', 'oauth/.well-known/oauth-protected-resource/index.php',
             '.htaccess', 'mcp/.htaccess', 'oauth/.htaccess', 'autoload.php', 'version.php', 'lib/OrgBox/SiteOps/Bootstrap.php', 'lib/OrgBox/SiteOps/Admin/settings.view.php', 'lib/OrgBox/SiteOps/Admin/authorize.view.php'] as $file) {
             assertTrue(in_array('site.ops/' . $file, $names, true), $file);
@@ -283,7 +283,7 @@ test('site.ops: точки входа ссылаются только на су�
             assertTrue($exists, $name . ' → ' . $relative . ' (' . $target . ')');
         }
     }
-    assertTrue($count >= 11, 'найдено точек входа: ' . $count);
+    assertTrue($count >= 10, 'найдено точек входа: ' . $count);
     assertTrue(is_file(__DIR__ . '/../modules/orgbox.siteops/lib/OrgBox/SiteOps/Admin/settings.view.php'));
     assertTrue(is_file(__DIR__ . '/../modules/orgbox.siteops/lib/OrgBox/SiteOps/Admin/authorize.view.php'));
 });
@@ -296,7 +296,7 @@ test('site.ops: .htaccess — по умолчанию всё закрыто, о�
     assertTrue(!str_contains($main, 'FilesMatch') && !str_contains($main, 'Require all granted'),
         'FilesMatch в корне открыл бы index.php во вложенных папках (например, в копиях _updates)');
     // Все index.php лежат только в папках с собственным разрешающим .htaccess
-    $entry = ['mcp', 'api', 'admin', 'oauth'];
+    $entry = ['mcp', 'admin', 'oauth'];
     foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)) as $file) {
         if ($file->getFilename() !== 'index.php') {
             continue;
@@ -307,7 +307,7 @@ test('site.ops: .htaccess — по умолчанию всё закрыто, о�
         assertContains('Require all granted', (string) file_get_contents($root . '/' . $top . '/.htaccess'), $top);
     }
     assertContains('DirectorySlash Off', $main, 'без этого Apache редиректит /site.ops/mcp на /site.ops/mcp/ и POST теряет тело');
-    assertContains('^(mcp|api|admin)/?$ $1/index.php', $main);
+    assertContains('^(mcp|admin)/?$ $1/index.php', $main);
     assertContains('oauth/(authorize|token|register|revoke)/?$', $main);
     assertContains('oauth-authorization-server|openid-configuration|oauth-protected-resource', $main, 'документы обнаружения без слэша');
     assertContains('HTTP_AUTHORIZATION', $main, 'заголовок Authorization передаётся в PHP');

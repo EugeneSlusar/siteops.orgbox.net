@@ -65,7 +65,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && check_bitrix_sessid()) {
             }
             $store->set('mode', ($_POST['mode'] ?? '') === Settings::MODE_READWRITE ? Settings::MODE_READWRITE : Settings::MODE_READONLY);
             $store->set('allowed_iblocks', implode(',', Settings::intList((string) ($_POST['allowed_iblocks'] ?? ''))));
-            $store->set('default_iblock_id', (string) max(0, (int) ($_POST['default_iblock_id'] ?? 0)));
             $store->set('allowed_ips', implode(',', Settings::stringList((string) ($_POST['allowed_ips'] ?? ''))));
             $store->set('allowed_origins', implode(',', Settings::stringList((string) ($_POST['allowed_origins'] ?? ''))));
             $store->set('rate_limit', (string) max(1, min(1000, (int) ($_POST['rate_limit'] ?? 60))));
@@ -166,7 +165,6 @@ $action = $APPLICATION->GetCurPageParam('', [], false);
             <label><input type="radio" name="mode" value="readwrite"<?=$settings->writesEnabled() ? ' checked' : ''?>> чтение и запись (удаления нет; изменения пишутся в журнал событий)</label>
         </td></tr>
         <tr><td>ID инфоблоков:</td><td><input type="text" name="allowed_iblocks" size="40" value="<?=$h(implode(', ', $settings->allowedIblocks()))?>"><br><small>Через запятую. Пусто — чтение всех инфоблоков. <b>Запись разрешена только для перечисленных.</b></small></td></tr>
-        <tr><td>Инфоблок по умолчанию (SEO):</td><td><input type="number" name="default_iblock_id" min="0" value="<?=(int) $settings->defaultIblockId()?>"></td></tr>
         <tr><td>Разрешённые IP:</td><td><input type="text" name="allowed_ips" size="40" value="<?=$h(implode(', ', $settings->allowedIps()))?>"><br><small>Пусто — любые. Если сайт за прокси или CDN, проверка по IP работать не будет.</small></td></tr>
         <tr><td>Разрешённые Origin:</td><td><input type="text" name="allowed_origins" size="40" value="<?=$h(implode(', ', $settings->allowedOrigins()))?>"><br><small>Для браузерных клиентов; обычным клиентам MCP не нужны. Пусто — запросы с Origin отклоняются.</small></td></tr>
         <tr><td>Запросов в минуту с IP:</td><td><input type="number" name="rate_limit" min="1" max="1000" value="<?=(int) $settings->rateLimitPerMinute()?>"></td></tr>

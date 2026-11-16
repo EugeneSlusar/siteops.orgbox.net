@@ -213,16 +213,6 @@ test('запись: раздел — изменение и dry_run', function ()
     assertSame('Новое', $gateway->sections[5]['name']);
 });
 
-test('SEO: чтение и запись с проверкой ключей и длины', function () use ($rw): void {
-    [$server, $gateway] = toolsetServer($rw + ['default_iblock_id' => '1']);
-    assertSame('{=this.NAME}', callTool($server, 'seo_templates_get', [])['data']['templates']['ELEMENT_META_TITLE']);
-    assertTrue(callTool($server, 'seo_templates_update', ['templates' => ['EVIL' => 'x']])['isError']);
-    assertTrue(callTool($server, 'seo_templates_update', ['templates' => ['ELEMENT_META_TITLE' => str_repeat('x', 501)]])['isError']);
-    $r = callTool($server, 'seo_templates_update', ['templates' => ['ELEMENT_META_TITLE' => '{=this.NAME} | Магазин']]);
-    assertSame(true, $r['data']['updated']);
-    assertSame('{=this.NAME} | Магазин', $gateway->seo['ELEMENT_META_TITLE']);
-});
-
 test('нет инструмента удаления: ни в одном режиме', function () use ($rw): void {
     [$server] = toolsetServer($rw);
     $tools = json_decode(json_encode($server->handle('{"jsonrpc":"2.0","id":1,"method":"tools/list"}')['data']['result']['tools']), true);

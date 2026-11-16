@@ -21,8 +21,6 @@ final class FakeGateway implements IblockGateway
     ];
     /** @var array<int,array<string,mixed>> */
     public array $sections = [5 => ['id' => 5, 'iblock_id' => 1, 'name' => 'Макияж', 'code' => 'makeup', 'active' => true, 'sort' => 10, 'parent_id' => 0, 'depth' => 1, 'description' => '', 'description_type' => 'text']];
-    /** @var array<string,string> */
-    public array $seo = ['ELEMENT_META_TITLE' => '{=this.NAME}'];
     /** @var list<string> */
     public array $calls = [];
     private int $nextId = 100;
@@ -115,14 +113,4 @@ final class FakeGateway implements IblockGateway
         }
     }
 
-    public function getSeoTemplates(int $iblockId): array
-    {
-        return $this->seo;
-    }
-
-    public function setSeoTemplates(int $iblockId, array $templates): void
-    {
-        $this->calls[] = 'setSeo';
-        $this->seo = $templates + $this->seo;
-    }
 }

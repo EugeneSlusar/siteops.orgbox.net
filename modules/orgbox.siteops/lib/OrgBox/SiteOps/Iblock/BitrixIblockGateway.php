@@ -240,24 +240,6 @@ final class BitrixIblockGateway implements IblockGateway
         }
     }
 
-    public function getSeoTemplates(int $iblockId): array
-    {
-        $templates = (new \Bitrix\Iblock\InheritedProperty\IblockTemplates($iblockId))->findTemplates();
-        $result = [];
-        foreach ($templates as $code => $template) {
-            $result[(string) $code] = is_array($template) ? (string) ($template['TEMPLATE'] ?? '') : (string) $template;
-        }
-
-        return $result;
-    }
-
-    public function setSeoTemplates(int $iblockId, array $templates): void
-    {
-        (new \Bitrix\Iblock\InheritedProperty\IblockTemplates($iblockId))->set($templates);
-        (new \Bitrix\Iblock\InheritedProperty\IblockValues($iblockId))->clearValues();
-        \CIBlock::clearIblockTagCache($iblockId);
-    }
-
     /**
      * @param array<string,mixed> $fields
      * @return array<string,mixed>

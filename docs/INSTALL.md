@@ -1,5 +1,7 @@
 # Установка и подключение
 
+Уже распаковали и хотите быстро подключиться? Идите в [QUICKSTART.md](QUICKSTART.md).
+
 Есть две формы установки. Код один и тот же, различается место и хранение настроек.
 
 | | **Папка `site.ops`** (рекомендуется) | Модуль Битрикса |
@@ -47,17 +49,17 @@
 
 ### Что делает `.htaccess` в `site.ops`
 
-- Всё закрыто, кроме папок `mcp/`, `api/`, `admin/`, `oauth/` (в каждой свой `.htaccess` с разрешением). Код (`lib/`) и резервные копии (`_updates/`) недоступны из браузера.
+- Всё закрыто, кроме папок `mcp/`, `admin/`, `oauth/` (в каждой свой `.htaccess` с разрешением). Код (`lib/`) и резервные копии (`_updates/`) недоступны из браузера.
 - `DirectorySlash Off` и правила `RewriteRule` дают адреса без `.php` и без слэша (`/site.ops/mcp`). Без этого Apache отвечает на запрос папки без слэша редиректом 301, а клиенты MCP теряют тело POST-запроса.
 - Заголовок `Authorization` передаётся в PHP (на Apache с CGI/FastCGI он иначе пропадает). Если ваш хостинг всё равно его не передаёт, клиенту можно настроить заголовок `X-SiteOps-Token`.
 
-Это проверено автотестом на настоящем Apache (`tests/apache/verify.sh`, 46 проверок). Если хостинг ограничивает `AllowOverride` (нет `Indexes`/`FileInfo`), страница вернёт 500: попросите разрешить или перенесите правила в конфиг сервера.
+Это проверено автотестом на настоящем Apache (`tests/apache/verify.sh`, 45 проверок). Если хостинг ограничивает `AllowOverride` (нет `Indexes`/`FileInfo`), страница вернёт 500: попросите разрешить или перенесите правила в конфиг сервера.
 
 **На nginx без Apache `.htaccess` не работает**, закройте служебные файлы и задайте адреса вручную:
 
 ```nginx
-location ~ ^/site\.ops/(?!(mcp|api|admin|oauth)(/|$)) { deny all; }
-location ~ ^/site\.ops/(mcp|api|admin)$ { rewrite ^(.*)$ $1/index.php last; }
+location ~ ^/site\.ops/(?!(mcp|admin|oauth)(/|$)) { deny all; }
+location ~ ^/site\.ops/(mcp|admin)$ { rewrite ^(.*)$ $1/index.php last; }
 location ~ ^/site\.ops/oauth/(authorize|token|register|revoke)$ { rewrite ^(.*)$ $1/index.php last; }
 ```
 

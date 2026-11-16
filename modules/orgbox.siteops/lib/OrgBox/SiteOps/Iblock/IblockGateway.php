@@ -50,10 +50,4 @@ interface IblockGateway
 
     /** @param array<string,mixed> $fields */
     public function updateSection(int $id, array $fields): void;
-
-    /** @return array<string,string> */
-    public function getSeoTemplates(int $iblockId): array;
-
-    /** @param array<string,string> $templates */
-    public function setSeoTemplates(int $iblockId, array $templates): void;
 }

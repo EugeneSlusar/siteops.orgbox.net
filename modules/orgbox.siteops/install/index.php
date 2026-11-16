@@ -26,7 +26,7 @@ class orgbox_siteops extends CModule
         ModuleManager::registerModule($this->MODULE_ID);
         $this->InstallFiles();
         // По умолчанию всё выключено: сначала администратор включает MCP и создаёт токен.
-        foreach (['mcp_enabled' => 'N', 'api_enabled' => 'N', 'mode' => 'readonly', 'allowed_iblocks' => ''] as $name => $value) {
+        foreach (['mcp_enabled' => 'N', 'mode' => 'readonly', 'allowed_iblocks' => ''] as $name => $value) {
             if (Option::get($this->MODULE_ID, $name, null) === null) {
                 Option::set($this->MODULE_ID, $name, $value);
             }

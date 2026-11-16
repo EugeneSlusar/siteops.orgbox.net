@@ -19,11 +19,6 @@ use OrgBox\SiteOps\Mcp\ToolRegistry;
  */
 final class IblockToolset
 {
-    public const SEO_KEYS = [
-        'SECTION_META_TITLE', 'SECTION_META_DESCRIPTION', 'SECTION_META_KEYWORDS', 'SECTION_PAGE_TITLE',
-        'ELEMENT_META_TITLE', 'ELEMENT_META_DESCRIPTION', 'ELEMENT_META_KEYWORDS', 'ELEMENT_PAGE_TITLE',
-    ];
-
     private const ELEMENT_FIELDS = [
         'NAME' => 'string255', 'CODE' => 'code', 'ACTIVE' => 'bool', 'SORT' => 'sort',
         'PREVIEW_TEXT' => 'text', 'DETAIL_TEXT' => 'text',
@@ -84,10 +79,6 @@ final class IblockToolset
             'type' => 'object', 'properties' => ['id' => $int], 'required' => ['id'],
         ], false, fn (array $a): array => $this->elementGet($a)));
 
-        $registry->register(new Tool('seo_templates_get', 'SEO-шаблоны инфоблока (заголовки и описания разделов и элементов).', [
-            'type' => 'object', 'properties' => ['iblock_id' => $int],
-        ], false, fn (array $a): array => $this->seoGet($a)));
-
         $registry->register(new Tool('element_update', 'Изменить поля и свойства элемента. Удаления нет; снять с публикации можно через active=false.', [
             'type' => 'object',
             'properties' => [
@@ -120,11 +111,6 @@ final class IblockToolset
             'required' => ['id', 'fields'],
         ], true, fn (array $a): array => $this->sectionUpdate($a)));
 
-        $registry->register(new Tool('seo_templates_update', 'Изменить SEO-шаблоны инфоблока. Допустимые ключи: ' . implode(', ', self::SEO_KEYS), [
-            'type' => 'object',
-            'properties' => ['iblock_id' => $int, 'templates' => ['type' => 'object'], 'dry_run' => $dryRun],
-            'required' => ['templates'],
-        ], true, fn (array $a): array => $this->seoUpdate($a)));
     }
 
     // ---- чтение -------------------------------------------------------------------------------
@@ -190,14 +176,6 @@ final class IblockToolset
         $this->readableIblock($element['iblock_id'] ?? null);
 
         return $element;
-    }
-
-    /** @return array<string,mixed> */
-    private function seoGet(array $args): array
-    {
-        $id = $this->readableIblock($args['iblock_id'] ?? $this->defaultIblock());
-
-        return ['iblock_id' => $id, 'templates' => $this->gateway->getSeoTemplates($id)];
     }
 
     // ---- запись -------------------------------------------------------------------------------
@@ -275,45 +253,6 @@ final class IblockToolset
         return ['updated' => true, 'id' => $id, 'changes' => $changes];
     }
 
-    /** @return array<string,mixed> */
-    private function seoUpdate(array $args): array
-    {
-        $iblockId = $this->writableIblock($args['iblock_id'] ?? $this->defaultIblock());
-        $templates = $this->objectArg($args, 'templates');
-        $clean = [];
-        foreach ($templates as $key => $value) {
-            if (!in_array($key, self::SEO_KEYS, true) || !is_string($value)) {
-                throw new ToolException('Недопустимое SEO-поле: ' . $key . '. Допустимые: ' . implode(', ', self::SEO_KEYS));
-            }
-            if (mb_strlen($value) > 500) {
-                throw new ToolException('SEO-шаблон не может быть длиннее 500 символов: ' . $key);
-            }
-            $clean[$key] = trim($value);
-        }
-        if ($clean === []) {
-            throw new ToolException('Нечего изменять: передайте templates.');
-        }
-
-        $current = $this->gateway->getSeoTemplates($iblockId);
-        $changes = [];
-        foreach ($clean as $key => $value) {
-            if (($current[$key] ?? '') !== $value) {
-                $changes[$key] = ['before' => $current[$key] ?? '', 'after' => $value];
-            }
-        }
-        if ($changes === []) {
-            return ['updated' => false, 'iblock_id' => $iblockId, 'message' => 'Значения уже совпадают, изменений нет.'];
-        }
-        if (!empty($args['dry_run'])) {
-            return ['dry_run' => true, 'iblock_id' => $iblockId, 'changes' => $changes];
-        }
-
-        $this->gateway->setSeoTemplates($iblockId, $clean);
-        $this->audit->log('seo.update', ['iblock_id' => $iblockId, 'changes' => $this->shorten($changes)]);
-
-        return ['updated' => true, 'iblock_id' => $iblockId, 'changes' => $changes];
-    }
-
     // ---- проверки и нормализация --------------------------------------------------------------
 
     private function readableIblock(mixed $value): int
@@ -341,13 +280,6 @@ final class IblockToolset
         }
 
         return $this->readableIblock($id);
-    }
-
-    private function defaultIblock(): ?int
-    {
-        $id = $this->settings->defaultIblockId();
-
-        return $id > 0 ? $id : null;
     }
 
     private function intArg(mixed $value, string $name, int $min = 1): int
