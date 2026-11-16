@@ -4,18 +4,22 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/Support/BitrixAdminStubs.php';
 
+use OrgBox\SiteOps\Admin\Csrf;
 use OrgBox\SiteOps\Bootstrap;
+use OrgBox\SiteOps\Config\FileOptionStore;
+use OrgBox\SiteOps\Config\Settings;
 use OrgBox\SiteOps\Config\OptionStore;
 
 /** Прогоняет страницу настроек site.ops и возвращает HTML. */
-function renderAdmin(string $base, string $method = 'GET', array $post = [], bool $sessid = true, ?OptionStore $store = null): string
+function renderAdmin(string $base, string $method = 'GET', array $post = [], bool $sessid = true, ?OptionStore $store = null, array $cookies = []): string
 {
     $docroot = tempDir();
     mkdir($docroot . '/bitrix/modules/main/include', 0755, true);
     touch($docroot . '/bitrix/modules/main/include/prolog_admin_after.php');
     touch($docroot . '/bitrix/modules/main/include/epilog_admin.php');
 
-    $saved = [$_SERVER, $_POST];
+    $saved = [$_SERVER, $_POST, $_COOKIE];
+    $_COOKIE = $cookies;
     $_SERVER['DOCUMENT_ROOT'] = $docroot;
     $_SERVER['HTTP_HOST'] = 'shop.example';
     $_SERVER['HTTPS'] = 'on';
@@ -34,7 +38,7 @@ function renderAdmin(string $base, string $method = 'GET', array $post = [], boo
         ob_end_clean();
         throw $e;
     } finally {
-        [$_SERVER, $_POST] = $saved;
+        [$_SERVER, $_POST, $_COOKIE] = $saved;
         removeDir($docroot);
     }
 
@@ -105,12 +109,15 @@ test('страница настроек: режим и список инфобл
     });
 });
 
-test('страница настроек: не прошла проверка сессии — об этом сказано вслух, ничего не записано', function (): void {
+test('страница настроек: не прошла проверка безопасности формы — об этом сказано вслух, ничего не записано', function (): void {
     withSite(function (string $base): void {
         $html = renderAdmin($base, 'POST', ['action' => 'save', 'mcp_enabled' => 'Y', 'oauth_enabled' => 'Y'], false);
-        assertContains('MSG ERROR: Не прошла проверка сессии', $html);
+        assertContains('MSG ERROR: Не прошла проверка безопасности формы', $html);
         assertContains('НЕ сохранены', $html);
-        assertTrue(!is_file($base . '/_data/settings.php'), 'файл настроек не создан');
+        assertContains('в форме sessid Битрикса: нет', $html, 'в сообщении видно, что именно не пришло');
+        assertContains('cookie защиты форм: нет', $html);
+        $stored = is_file($base . '/_data/settings.php') ? (string) file_get_contents($base . '/_data/settings.php') : '';
+        assertTrue(!str_contains($stored, 'mcp_enabled') && !str_contains($stored, 'oauth_enabled'), 'настройки не записаны (в файле только секрет защиты форм)');
         assertTrue(!checked($html, 'mcp_enabled'));
     });
 });
@@ -198,4 +205,86 @@ test('страница настроек: если запись молча не �
         assertContains('oauth_enabled: записано «Y», прочитано «»', $html);
         assertTrue(!str_contains($html, 'MSG OK'), 'об успехе сообщать нельзя');
     });
+});
+
+/** Пара «cookie + поле формы», которую страница выдала бы браузеру (по секрету из файла настроек). */
+function csrfPair(string $base, string $raw = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'): array
+{
+    $secret = (new Settings(new FileOptionStore($base . '/_data/settings.php')))->csrfSecret();
+
+    return [[Csrf::COOKIE => $raw], [Csrf::FIELD => (new Csrf($secret))->issue($raw)['field']]];
+}
+
+test('защита форм: страница выдаёт в форме скрытое поле, секрет создаётся один раз и не меняется', function (): void {
+    withSite(function (string $base): void {
+        $first = renderAdmin($base);
+        preg_match_all('/name="siteops_csrf" value="([a-f0-9]{64})"/', $first, $m1);
+        assertTrue(count($m1[1]) >= 3, 'поле есть во всех трёх формах');
+        $second = renderAdmin($base);
+        preg_match_all('/name="siteops_csrf" value="([a-f0-9]{64})"/', $second, $m2);
+        assertSame(strlen((new Settings(new FileOptionStore($base . '/_data/settings.php')))->csrfSecret()), 64);
+        assertTrue($m1[1][0] !== $m2[1][0], 'без cookie каждый раз новое значение (cookie ещё не сохранён браузером)');
+    });
+});
+
+test('защита форм: Битрикс не пропускает sessid (как у вас на сайте), а собственная защита пропускает — настройки сохраняются', function (): void {
+    withSite(function (string $base): void {
+        renderAdmin($base); // создаёт секрет
+        [$cookies, $field] = csrfPair($base);
+        $html = renderAdmin($base, 'POST', ['action' => 'save', 'mcp_enabled' => 'Y', 'oauth_enabled' => 'Y', 'mode' => 'readonly'] + $field, false, null, $cookies);
+        assertContains('MSG OK: Настройки сохранены и проверены чтением', $html);
+        $s = Bootstrap::standalone($base)->settings();
+        assertTrue($s->mcpEnabled() && $s->oauthEnabled(), 'включено, хотя штатная проверка сессии не прошла');
+    });
+});
+
+test('защита форм: создание токена тоже работает без штатной проверки сессии', function (): void {
+    withSite(function (string $base): void {
+        renderAdmin($base);
+        [$cookies, $field] = csrfPair($base);
+        $html = renderAdmin($base, 'POST', ['action' => 'token'] + $field, false, null, $cookies);
+        assertTrue((bool) preg_match('/value="sop_[a-f0-9]{48}"/', $html), 'токен создан и показан');
+    });
+});
+
+test('защита форм: подделка отклоняется (чужое поле, чужой секрет, нет cookie, битая cookie)', function (): void {
+    withSite(function (string $base): void {
+        renderAdmin($base);
+        [$cookies, $field] = csrfPair($base);
+        $post = ['action' => 'save', 'mcp_enabled' => 'Y', 'mode' => 'readonly'];
+        $attacks = [
+            'чужое поле' => [$post + [Csrf::FIELD => str_repeat('0', 64)], $cookies],
+            'поле от другого секрета' => [$post + [Csrf::FIELD => (new Csrf('чужой-секрет'))->issue('a1b2c3d4e5f60718293a4b5c6d7e8f90')['field']], $cookies],
+            'нет cookie' => [$post + $field, []],
+            'битая cookie' => [$post + $field, [Csrf::COOKIE => 'не-hex']],
+            'cookie от другого значения' => [$post + $field, [Csrf::COOKIE => 'ffffffffffffffffffffffffffffffff']],
+            'поле — массив' => [$post + [Csrf::FIELD => ['x']], $cookies],
+        ];
+        foreach ($attacks as $name => [$data, $cookie]) {
+            $html = renderAdmin($base, 'POST', $data, false, null, $cookie);
+            assertContains('Не прошла проверка безопасности формы', $html, $name);
+            assertTrue(!Bootstrap::standalone($base)->settings()->mcpEnabled(), $name . ': настройки изменились');
+        }
+    });
+});
+
+test('защита форм: запасной вариант — штатный sessid Битрикса по-прежнему принимается', function (): void {
+    withSite(function (string $base): void {
+        $html = renderAdmin($base, 'POST', ['action' => 'save', 'mcp_enabled' => 'Y', 'mode' => 'readonly'], true);
+        assertContains('MSG OK', $html);
+        assertTrue(Bootstrap::standalone($base)->settings()->mcpEnabled());
+    });
+});
+
+test('Csrf: выдача, проверка, повторное использование cookie и отказ при подмене', function (): void {
+    $csrf = new Csrf('секрет');
+    $a = $csrf->issue(null);
+    assertTrue((bool) preg_match('/^[a-f0-9]{32}$/', $a['cookie']) && (bool) preg_match('/^[a-f0-9]{64}$/', $a['field']));
+    assertTrue($csrf->verify($a['cookie'], $a['field']));
+    assertSame($a['cookie'], $csrf->issue($a['cookie'])['cookie'], 'cookie переиспользуется, чтобы работали несколько вкладок');
+    assertSame($a['field'], $csrf->issue($a['cookie'])['field']);
+    assertTrue(!$csrf->verify($a['cookie'], strrev($a['field'])));
+    assertTrue(!$csrf->verify(null, $a['field']) && !$csrf->verify($a['cookie'], null) && !$csrf->verify([$a['cookie']], $a['field']));
+    assertTrue(!(new Csrf('другой'))->verify($a['cookie'], $a['field']), 'другой секрет');
+    assertTrue($csrf->issue('не-hex')['cookie'] !== 'не-hex', 'недопустимая cookie заменяется новой');
 });

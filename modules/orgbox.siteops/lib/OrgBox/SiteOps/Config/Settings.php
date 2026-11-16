@@ -107,6 +107,18 @@ final class Settings
         return $this->store->get('update_allow_unsigned', 'N') === 'Y';
     }
 
+    /** Секрет для защиты форм от CSRF: создаётся при первом обращении и хранится рядом с остальными настройками. */
+    public function csrfSecret(): string
+    {
+        $secret = $this->store->get('csrf_secret', '');
+        if (strlen($secret) < 32) {
+            $secret = bin2hex(random_bytes(32));
+            $this->store->set('csrf_secret', $secret);
+        }
+
+        return $secret;
+    }
+
     public function store(): OptionStore
     {
         return $this->store;

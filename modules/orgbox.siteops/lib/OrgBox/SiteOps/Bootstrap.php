@@ -34,8 +34,11 @@ final class Bootstrap
     private function __construct(
         private PackageProfile $profile,
         private string $baseDir,
-        /** Подмена хранилища настроек (для тестов). */
+        /** Подмены для тестов: хранилище настроек, хранилище OAuth, редирект. */
         private ?OptionStore $storeOverride = null,
+        private ?OAuthStore $oauthStoreOverride = null,
+        /** @var (callable(?string):never)|null вызывается вместо header/exit: получает адрес редиректа или null при простом завершении */
+        private $exitHook = null,
     ) {
     }
 
@@ -46,9 +49,28 @@ final class Bootstrap
     }
 
     /** Папка site.ops в корне сайта; настройки лежат в ней же. */
-    public static function standalone(?string $baseDir = null, ?OptionStore $store = null): self
+    public static function standalone(?string $baseDir = null, ?OptionStore $store = null, ?OAuthStore $oauthStore = null, ?callable $exitHook = null): self
     {
-        return new self(PackageProfile::standalone(), $baseDir ?? dirname(__DIR__, 3), $store);
+        return new self(PackageProfile::standalone(), $baseDir ?? dirname(__DIR__, 3), $store, $oauthStore, $exitHook);
+    }
+
+    /** Редирект и завершение запроса. В тестах подменяется. */
+    public function redirect(string $url): never
+    {
+        if ($this->exitHook !== null) {
+            ($this->exitHook)($url);
+        }
+        header('Location: ' . $url, true, 302);
+        exit;
+    }
+
+    /** Завершение запроса после вывода страницы. В тестах подменяется. */
+    public function finish(): never
+    {
+        if ($this->exitHook !== null) {
+            ($this->exitHook)(null);
+        }
+        exit;
     }
 
     public function profile(): PackageProfile
@@ -138,7 +160,7 @@ final class Bootstrap
 
     public function oauthStore(): OAuthStore
     {
-        return new BitrixOAuthStore($this->siteKey());
+        return $this->oauthStoreOverride ?? new BitrixOAuthStore($this->siteKey());
     }
 
     public function oauthServer(): OAuthServer

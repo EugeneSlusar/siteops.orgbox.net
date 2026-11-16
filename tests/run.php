@@ -12,12 +12,12 @@ $failed = 0;
 foreach ($GLOBALS['__tests'] as $name => $body) {
     try {
         $body();
-        echo "  ok   $name\n";
+        fwrite(STDOUT, "  ok   $name\n");
     } catch (Throwable $exception) {
         $failed++;
-        echo "  FAIL $name\n       " . get_class($exception) . ': ' . $exception->getMessage() . "\n       at " . basename($exception->getFile()) . ':' . $exception->getLine() . "\n";
+        fwrite(STDOUT, "  FAIL $name\n       " . get_class($exception) . ': ' . $exception->getMessage() . "\n       at " . basename($exception->getFile()) . ':' . $exception->getLine() . "\n");
     }
 }
 
-echo "\n" . count($GLOBALS['__tests']) . ' тестов, ' . $failed . " с ошибками\n";
+fwrite(STDOUT, "\n" . count($GLOBALS['__tests']) . ' тестов, ' . $failed . " с ошибками\n");
 exit($failed === 0 ? 0 : 1);

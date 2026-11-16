@@ -8,6 +8,7 @@ declare(strict_types=1);
  * уже подключённый prolog_admin_before.php и проверенное право администратора.
  */
 
+use OrgBox\SiteOps\Admin\Csrf;
 use OrgBox\SiteOps\Bootstrap;
 use OrgBox\SiteOps\Config\Settings;
 use OrgBox\SiteOps\Update\CurlHttpClient;
@@ -21,6 +22,26 @@ global $APPLICATION;
 
 $settings = $siteops->settings();
 $store = $settings->store();
+
+// Защита форм: собственный CSRF-токен (не зависит от сессии PHP) + штатный sessid Битрикса как запасной вариант.
+try {
+    $csrfSecret = $settings->csrfSecret();
+} catch (\Throwable) {
+    $csrfSecret = hash('sha256', 'siteops-fallback|' . (string) ($_SERVER['DOCUMENT_ROOT'] ?? ''));
+}
+$csrf = new Csrf($csrfSecret);
+$csrfCookie = isset($_COOKIE[Csrf::COOKIE]) && is_string($_COOKIE[Csrf::COOKIE]) ? $_COOKIE[Csrf::COOKIE] : null;
+$csrfPair = $csrf->issue($csrfCookie);
+Csrf::sendCookie($csrfPair['cookie'], !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+$csrfFields = static fn (): string => bitrix_sessid_post()
+    . '<input type="hidden" name="' . Csrf::FIELD . '" value="' . htmlspecialcharsbx($csrfPair['field']) . '">';
+$csrfPassed = static fn (): bool => $csrf->verify($csrfCookie, $_POST[Csrf::FIELD] ?? null) || check_bitrix_sessid();
+/** Что именно не дошло: нужно, чтобы по сообщению об ошибке было видно причину. */
+$csrfDiagnosis = static fn (): string => 'в форме sessid Битрикса: ' . (isset($_POST['sessid']) ? 'да' : 'нет')
+    . '; cookie PHPSESSID: ' . (isset($_COOKIE['PHPSESSID']) ? 'да' : 'нет')
+    . '; cookie защиты форм: ' . ($csrfCookie !== null ? 'да' : 'нет')
+    . '; поле защиты форм: ' . (isset($_POST[Csrf::FIELD]) ? 'да' : 'нет');
+
 $messages = [];
 $newToken = '';
 $release = null;
@@ -49,8 +70,8 @@ $makeUpdater = static function () use ($settings, $siteops): Updater {
     );
 };
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !check_bitrix_sessid()) {
-    $messages[] = ['ERROR', 'Не прошла проверка сессии Битрикса: настройки НЕ сохранены. Обновите страницу (Ctrl+F5) и повторите.'];
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$csrfPassed()) {
+    $messages[] = ['ERROR', 'Не прошла проверка безопасности формы: настройки НЕ сохранены. Обновите страницу (Ctrl+F5) и повторите. Если повторяется, пришлите это сообщение разработчику (' . $csrfDiagnosis() . ').'];
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = (string) ($_POST['action'] ?? 'save');
     try {
@@ -170,7 +191,7 @@ $action = $APPLICATION->GetCurPageParam('', [], false);
             <?=$settings->tokenHash() !== '' ? 'создан (значение не хранится)' : 'не создан'?>
         <?php endif; ?>
         <form method="post" action="<?=$h($action)?>" style="margin-top:8px">
-            <?=bitrix_sessid_post()?>
+            <?=$csrfFields()?>
             <button class="adm-btn" name="action" value="token" onclick="return confirm('Создать новый токен? Прежний перестанет работать.')">Создать новый токен</button>
             <button class="adm-btn" name="action" value="revoke" onclick="return confirm('Отозвать токен?')">Отозвать</button>
         </form>
@@ -179,7 +200,7 @@ $action = $APPLICATION->GetCurPageParam('', [], false);
 
 <h3>Настройки</h3>
 <form method="post" action="<?=$h($action)?>">
-    <?=bitrix_sessid_post()?>
+    <?=$csrfFields()?>
     <input type="hidden" name="action" value="save">
     <table class="adm-detail-content-table edit-table">
         <tr><td width="35%">MCP-сервер:</td><td><label><input type="checkbox" name="mcp_enabled" value="Y"<?=$settings->mcpEnabled() ? ' checked' : ''?>> включён</label></td></tr>
@@ -224,7 +245,7 @@ $action = $APPLICATION->GetCurPageParam('', [], false);
             <td class="adm-list-table-cell"><?=$h(date('d.m.Y H:i', (int) $connection['last_used']))?></td>
             <td class="adm-list-table-cell">
                 <form method="post" action="<?=$h($action)?>" style="margin:0">
-                    <?=bitrix_sessid_post()?>
+                    <?=$csrfFields()?>
                     <input type="hidden" name="client_id" value="<?=$h($connection['client_id'])?>">
                     <button class="adm-btn" name="action" value="revoke_client" onclick="return confirm('Отозвать подключение?')">Отозвать</button>
                 </form>
@@ -236,7 +257,7 @@ $action = $APPLICATION->GetCurPageParam('', [], false);
 <?php endif; ?>
 
 <form method="post" action="<?=$h($action)?>" style="margin-top:16px">
-    <?=bitrix_sessid_post()?>
+    <?=$csrfFields()?>
     <button class="adm-btn" name="action" value="check">Проверить обновления</button>
     <?php if ($release !== null): ?>
         <button class="adm-btn adm-btn-green" name="action" value="update" onclick="return confirm('Установить версию <?=$h($release->version)?>? Текущая версия сохранится в резервной копии.')">Установить <?=$h($release->version)?></button>

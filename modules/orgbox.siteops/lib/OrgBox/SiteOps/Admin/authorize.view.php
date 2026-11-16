@@ -12,6 +12,7 @@ declare(strict_types=1);
  *  - страница не встраивается во фреймы (защита от кликджекинга).
  */
 
+use OrgBox\SiteOps\Admin\Csrf;
 use OrgBox\SiteOps\Audit\BitrixAuditLogger;
 use OrgBox\SiteOps\Bootstrap;
 use OrgBox\SiteOps\OAuth\AuthorizeException;
@@ -27,12 +28,32 @@ header('Referrer-Policy: no-referrer');
 $h = static fn (string $value): string => htmlspecialcharsbx($value);
 $settings = $siteops->settings();
 
-$page = static function (string $title, string $html) use ($APPLICATION): void {
+// Защита форм: собственный CSRF-токен (не зависит от сессии PHP) + штатный sessid Битрикса как запасной вариант.
+try {
+    $csrfSecret = $settings->csrfSecret();
+} catch (\Throwable) {
+    $csrfSecret = hash('sha256', 'siteops-fallback|' . (string) ($_SERVER['DOCUMENT_ROOT'] ?? ''));
+}
+$csrf = new Csrf($csrfSecret);
+$csrfCookie = isset($_COOKIE[Csrf::COOKIE]) && is_string($_COOKIE[Csrf::COOKIE]) ? $_COOKIE[Csrf::COOKIE] : null;
+$csrfPair = $csrf->issue($csrfCookie);
+Csrf::sendCookie($csrfPair['cookie'], !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+$csrfFields = static fn (): string => bitrix_sessid_post()
+    . '<input type="hidden" name="' . Csrf::FIELD . '" value="' . htmlspecialcharsbx($csrfPair['field']) . '">';
+$csrfPassed = static fn (): bool => $csrf->verify($csrfCookie, $_POST[Csrf::FIELD] ?? null) || check_bitrix_sessid();
+/** Что именно не дошло: нужно, чтобы по сообщению об ошибке было видно причину. */
+$csrfDiagnosis = static fn (): string => 'в форме sessid Битрикса: ' . (isset($_POST['sessid']) ? 'да' : 'нет')
+    . '; cookie PHPSESSID: ' . (isset($_COOKIE['PHPSESSID']) ? 'да' : 'нет')
+    . '; cookie защиты форм: ' . ($csrfCookie !== null ? 'да' : 'нет')
+    . '; поле защиты форм: ' . (isset($_POST[Csrf::FIELD]) ? 'да' : 'нет');
+
+
+$page = static function (string $title, string $html) use ($APPLICATION, $siteops): void {
     require $_SERVER['DOCUMENT_ROOT'] . '/bitrix/modules/main/include/prolog_admin_after.php';
     $APPLICATION->SetTitle($title);
     echo $html;
     require $_SERVER['DOCUMENT_ROOT'] . '/bitrix/modules/main/include/epilog_admin.php';
-    exit;
+    $siteops->finish();
 };
 
 if (!$siteops->oauthAvailable() || !$settings->mcpEnabled() || !$settings->oauthEnabled()) {
@@ -46,8 +67,7 @@ try {
 } catch (AuthorizeException $exception) {
     $back = $oauth->errorRedirect($exception);
     if ($back !== null) {
-        header('Location: ' . $back, true, 302);
-        exit;
+        $siteops->redirect($back);
     }
     http_response_code(400);
     $page('Ошибка подключения', '<p>' . $h($exception->getMessage()) . '</p>');
@@ -56,18 +76,21 @@ try {
 $client = $request['client'];
 $host = (string) (parse_url($request['redirect_uri'], PHP_URL_HOST) ?: '');
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && check_bitrix_sessid()) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$csrfPassed()) {
+    http_response_code(400);
+    $page('Подключение не подтверждено', '<p>Не прошла проверка безопасности формы: доступ не выдан. Откройте ссылку подключения заново. (' . $h($csrfDiagnosis()) . ')</p>');
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $decision = (string) ($_POST['decision'] ?? '');
     if ($decision === 'allow') {
         (new BitrixAuditLogger())->log('oauth.approve', [
             'client_id' => $client['client_id'], 'client_name' => $client['name'], 'redirect_host' => $host, 'user_id' => (int) $USER->GetID(),
         ]);
-        header('Location: ' . $oauth->approve($request, (int) $USER->GetID()), true, 302);
-        exit;
+        $siteops->redirect($oauth->approve($request, (int) $USER->GetID()));
     }
     if ($decision === 'deny') {
-        header('Location: ' . $oauth->deny($request), true, 302);
-        exit;
+        $siteops->redirect($oauth->deny($request));
     }
 }
 
@@ -90,7 +113,7 @@ ob_start();
     Права доступа определяются настройками сайта (режим и список инфоблоков); подключение не может их расширить.
     Отозвать доступ можно на странице настроек SiteOps.</small></p>
     <form method="post" action="<?=$h($action)?>">
-        <?=bitrix_sessid_post()?>
+        <?=$csrfFields()?>
         <button class="adm-btn-save" name="decision" value="allow" type="submit">Разрешить</button>
         <button class="adm-btn" name="decision" value="deny" type="submit">Отклонить</button>
     </form>
