@@ -34,6 +34,11 @@ function listTree(string $dir, string $prefix = ''): array
     $files = [];
     $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS));
     foreach ($iterator as $file) {
+        $relative = substr($file->getPathname(), strlen($dir) + 1);
+        // Данные сайта (настройки с токеном, копии обновлений) в релиз попадать не должны ни при каких условиях.
+        if (preg_match('#(^|/)(_data|_updates)(/|$)#', $relative)) {
+            continue;
+        }
         if ($file->isFile() && !$file->isLink()) {
             $files[$prefix . substr($file->getPathname(), strlen($dir) + 1)] = $file->getPathname();
         }

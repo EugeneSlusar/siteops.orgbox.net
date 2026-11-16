@@ -49,7 +49,9 @@ $makeUpdater = static function () use ($settings, $siteops): Updater {
     );
 };
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && check_bitrix_sessid()) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !check_bitrix_sessid()) {
+    $messages[] = ['ERROR', 'Не прошла проверка сессии Битрикса: настройки НЕ сохранены. Обновите страницу (Ctrl+F5) и повторите.'];
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = (string) ($_POST['action'] ?? 'save');
     try {
         if ($action === 'save') {
@@ -74,7 +76,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && check_bitrix_sessid()) {
             if (trim((string) ($_POST['update_github_token'] ?? '')) !== '') {
                 $store->set('update_github_token', trim((string) $_POST['update_github_token']));
             }
-            $messages[] = ['OK', 'Настройки сохранены.'];
+            // Проверка чтением новым экземпляром хранилища: «сохранено» только если значения действительно записаны.
+            $expected = [
+                'mcp_enabled' => isset($_POST['mcp_enabled']) ? 'Y' : 'N',
+                'mode' => ($_POST['mode'] ?? '') === Settings::MODE_READWRITE ? Settings::MODE_READWRITE : Settings::MODE_READONLY,
+                'allowed_iblocks' => implode(',', Settings::intList((string) ($_POST['allowed_iblocks'] ?? ''))),
+            ];
+            if ($siteops->oauthAvailable()) {
+                $expected['oauth_enabled'] = isset($_POST['oauth_enabled']) ? 'Y' : 'N';
+            }
+            $fresh = $siteops->optionStore();
+            $wrong = [];
+            foreach ($expected as $name => $value) {
+                if ($fresh->get($name, '') !== $value) {
+                    $wrong[] = $name . ': записано «' . $value . '», прочитано «' . $fresh->get($name, '') . '»';
+                }
+            }
+            if ($wrong !== []) {
+                $messages[] = ['ERROR', 'Настройки НЕ сохранились (' . implode('; ', $wrong) . '). Хранилище: ' . ($siteops->isStandalone() ? $siteops->settingsFile() : 'b_option') . '. Сообщите это сообщение разработчику.'];
+            } else {
+                $messages[] = ['OK', 'Настройки сохранены и проверены чтением. MCP: ' . ($expected['mcp_enabled'] === 'Y' ? 'включён' : 'выключен')
+                    . ($siteops->oauthAvailable() ? '; подключение по ссылке: ' . ($expected['oauth_enabled'] === 'Y' ? 'включено' : 'выключено') : '')
+                    . '; режим: ' . ($expected['mode'] === Settings::MODE_READWRITE ? 'чтение и запись' : 'только чтение') . '.'];
+            }
         } elseif ($action === 'token') {
             $newToken = $settings->generateToken();
             $messages[] = ['OK', 'Новый токен создан. Прежний токен больше не работает.'];
@@ -134,6 +158,9 @@ $action = $APPLICATION->GetCurPageParam('', [], false);
 <h3>Подключение</h3>
 <table class="adm-detail-content-table edit-table">
     <tr><td width="35%">Версия модуля:</td><td><b><?=$h($siteops->version())?></b></td></tr>
+    <tr><td>Хранилище настроек:</td><td><?php if ($siteops->isStandalone()): $fileStore = $siteops->optionStore(); ?>
+        файл <code><?=$h($siteops->settingsFile())?></code>, запись <?=!($fileStore instanceof \OrgBox\SiteOps\Config\FileOptionStore) || $fileStore->isWritable() ? '<b style="color:#2a7a2a">возможна</b>' : '<b style="color:#b00">НЕВОЗМОЖНА: выдайте веб-серверу права на папку _data</b>'?>
+    <?php else: ?>таблица b_option (общие для всей установки Битрикса)<?php endif; ?></td></tr>
     <tr><td>Адрес MCP-сервера:</td><td><input type="text" readonly size="80" value="<?=$h($mcpUrl)?>" onclick="this.select()"></td></tr>
     <tr><td>Токен доступа:</td><td>
         <?php if ($newToken !== ''): ?>

@@ -36,7 +36,7 @@
 
 ## 2. Чтение (режим «только чтение»)
 
-- [ ] Токен создаётся, показывается один раз; в `b_option` лежит только хэш.
+- [ ] Токен создаётся, показывается один раз; в `site.ops/_data/settings.php` (или в `b_option` для модуля) лежит только хэш.
 - [ ] `tools/list` возвращает 5 инструментов (`iblock_list`, `iblock_properties`, `section_list`, `element_list`, `element_get`), без `element_update`, `element_create`, `section_update`.
 - [ ] `iblock_list`: число элементов совпадает с админкой.
 - [ ] `iblock_properties`: для свойства-списка перечислены значения; файловые свойства помечены `F`.

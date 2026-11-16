@@ -7,6 +7,8 @@ namespace OrgBox\SiteOps;
 use OrgBox\SiteOps\Audit\BitrixAuditLogger;
 use OrgBox\SiteOps\Auth\BearerTokenAuthenticator;
 use OrgBox\SiteOps\Config\BitrixOptionStore;
+use OrgBox\SiteOps\Config\FileOptionStore;
+use OrgBox\SiteOps\Config\OptionStore;
 use OrgBox\SiteOps\Config\Settings;
 use OrgBox\SiteOps\Http\BitrixCounterStore;
 use OrgBox\SiteOps\Http\McpEndpoint;
@@ -24,30 +26,29 @@ use OrgBox\SiteOps\Update\PackageProfile;
 
 /**
  * Сборка объектов внутри Битрикса. Две формы установки с одним и тем же кодом:
- *  - модуль:       /local/modules/orgbox.siteops   (настройки общие для установки Битрикса);
- *  - папка сайта:  <корень сайта>/site.ops          (настройки отдельные для каждого сайта по SITE_ID).
+ *  - модуль:       /local/modules/orgbox.siteops   (настройки в таблице b_option, общие для установки Битрикса);
+ *  - папка сайта:  <корень сайта>/site.ops          (настройки в файле _data/settings.php внутри папки: у каждого сайта свои).
  */
 final class Bootstrap
 {
     private function __construct(
         private PackageProfile $profile,
         private string $baseDir,
-        private string $siteId,
+        /** Подмена хранилища настроек (для тестов). */
+        private ?OptionStore $storeOverride = null,
     ) {
     }
 
     /** Формальный модуль: папка модуля = на уровень выше lib/. */
     public static function module(): self
     {
-        return new self(PackageProfile::module(), dirname(__DIR__, 3), '');
+        return new self(PackageProfile::module(), dirname(__DIR__, 3));
     }
 
-    /** Папка site.ops в корне сайта; настройки привязаны к текущему сайту. */
-    public static function standalone(): self
+    /** Папка site.ops в корне сайта; настройки лежат в ней же. */
+    public static function standalone(?string $baseDir = null, ?OptionStore $store = null): self
     {
-        $siteId = defined('SITE_ID') ? (string) SITE_ID : '';
-
-        return new self(PackageProfile::standalone(), dirname(__DIR__, 3), $siteId);
+        return new self(PackageProfile::standalone(), $baseDir ?? dirname(__DIR__, 3), $store);
     }
 
     public function profile(): PackageProfile
@@ -70,9 +71,33 @@ final class Bootstrap
         return ModuleInfo::version($this->baseDir, $this->profile->versionFile);
     }
 
+    /** Файл настроек формы «папка site.ops». */
+    public function settingsFile(): string
+    {
+        return $this->baseDir . '/_data/settings.php';
+    }
+
+    public function optionStore(): OptionStore
+    {
+        // Формальный модуль: b_option без привязки к сайту. Папка site.ops: файл внутри папки.
+        return $this->storeOverride
+            ?? ($this->isStandalone() ? new FileOptionStore($this->settingsFile()) : new BitrixOptionStore(''));
+    }
+
     public function settings(): Settings
     {
-        return new Settings(new BitrixOptionStore($this->siteId));
+        return new Settings($this->optionStore());
+    }
+
+    /**
+     * Ключ сайта для таблиц OAuth: 8 символов от пути корня сайта. Одинаков в админке и на публичных страницах
+     * (в отличие от SITE_ID Битрикса) и различается у разных сайтов, даже если у них общая база.
+     */
+    public function siteKey(): string
+    {
+        $root = (string) ($_SERVER['DOCUMENT_ROOT'] ?? $this->baseDir);
+
+        return substr(md5(realpath($root) ?: $root), 0, 8);
     }
 
     /** Папка для резервных копий и временных файлов обновления (закрыта от веба). */
@@ -113,7 +138,7 @@ final class Bootstrap
 
     public function oauthStore(): OAuthStore
     {
-        return new BitrixOAuthStore($this->siteId);
+        return new BitrixOAuthStore($this->siteKey());
     }
 
     public function oauthServer(): OAuthServer

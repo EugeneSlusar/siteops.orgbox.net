@@ -32,11 +32,12 @@ php -r 'preg_match("/<<<\x27HTACCESS\x27\n(.*?)\nHTACCESS\);/s", file_get_conten
 # Диагностика Authorization (только в этой копии)
 echo '<?php header("Content-Type: text/plain"); echo "AUTH=" . ($_SERVER["HTTP_AUTHORIZATION"] ?? "-") . " REDIRECT=" . ($_SERVER["REDIRECT_HTTP_AUTHORIZATION"] ?? "-");' > "$DOCROOT/site.ops/mcp/echo.php"
 
-# Настройки сайта: MCP и OAuth включены, статический токен sop_statictoken
+# Настройки сайта пишет настоящий класс из собранного пакета: MCP и OAuth включены, статический токен sop_statictoken
 mkdir -p "$DOCROOT/stub-state"
-php -r '$h=hash("sha256","sop_statictoken"); file_put_contents($argv[1], json_encode([
-  "orgbox.siteops|s2|mcp_enabled"=>"Y","orgbox.siteops|s2|oauth_enabled"=>"Y","orgbox.siteops|s2|token_hash"=>$h,
-  "orgbox.siteops|s2|public_url"=>$argv[2],"orgbox.siteops|s2|rate_limit"=>"1000"]));' "$DOCROOT/stub-state/options.json" "$BASE"
+php -r 'require $argv[1] . "/site.ops/autoload.php";
+  $s = new OrgBox\SiteOps\Config\FileOptionStore($argv[1] . "/site.ops/_data/settings.php");
+  foreach (["mcp_enabled" => "Y", "oauth_enabled" => "Y", "token_hash" => hash("sha256", "sop_statictoken"), "public_url" => $argv[2], "rate_limit" => "1000"] as $k => $v) { $s->set($k, $v); }' \
+  "$DOCROOT" "$BASE"
 chmod -R a+rwX "$WORK"; chmod a+rx "$WORK" 2>/dev/null
 
 ln -s "$PHPCGI" "$WORK/cgi/php"
@@ -147,7 +148,7 @@ check "POST /site.ops/oauth/revoke — 200" "$([ "$CODE" = 200 ] && [ -z "$LOC" 
 echo "== закрыто от браузера (403)"
 for p in /site.ops/ /site.ops /site.ops/lib/OrgBox/SiteOps/Bootstrap.php /site.ops/lib/OrgBox/SiteOps/Admin/settings.view.php \
          /site.ops/autoload.php /site.ops/version.php /site.ops/.htaccess /site.ops/mcp/.htaccess /site.ops/_updates/ /site.ops/_updates \
-         /site.ops/_updates/.htaccess /site.ops/_updates/backup-0.0.1-x/mcp/index.php /site.ops/_updates/backup-0.0.1-x/mcp/ \
+         /site.ops/_updates/.htaccess /site.ops/_data/ /site.ops/_data /site.ops/_data/settings.php /site.ops/_data/.lock /site.ops/_updates/backup-0.0.1-x/mcp/index.php /site.ops/_updates/backup-0.0.1-x/mcp/ \
          /site.ops/mcp.php /site.ops/admin.php /site.ops/api.php; do
   req GET "$p"; check "GET $p — 403" "$([ "$CODE" = 403 ]; echo $?)"
 done

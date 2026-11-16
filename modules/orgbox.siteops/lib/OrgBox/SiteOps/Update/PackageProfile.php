@@ -12,6 +12,8 @@ final class PackageProfile
         public readonly string $root,
         public readonly array $required,
         public readonly string $versionFile,
+        /** @var list<string> папки внутри корня пакета, которые установка не копирует и не удаляет (данные сайта) */
+        public readonly array $preserved = [],
     ) {
     }
 
@@ -26,7 +28,7 @@ final class PackageProfile
     {
         // Только то, что не меняется при смене раскладки точек входа. Иначе старая версия, обновляющая сама себя,
         // отклонила бы новый архив (так было бы при переходе 0.3 → 0.4). Состав архива проверяют тесты сборки.
-        return new self('site.ops', ['autoload.php', 'version.php', '.htaccess', 'lib'], 'version.php');
+        return new self('site.ops', ['autoload.php', 'version.php', '.htaccess', 'lib'], 'version.php', ['_data', '_updates']);
     }
 
     /** Имя архива релиза: <корень>-<версия>.zip */

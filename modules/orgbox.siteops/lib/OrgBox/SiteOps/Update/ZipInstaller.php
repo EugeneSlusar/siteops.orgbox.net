@@ -203,7 +203,7 @@ final class ZipInstaller
                 continue;
             }
             $relative = ltrim(substr($file->getPathname(), strlen($root)), '/');
-            if ($this->skip !== null && ($relative === $this->skip || str_starts_with($relative, $this->skip . '/'))) {
+            if ($this->isPreserved($relative)) {
                 continue;
             }
             $result[] = $relative;
@@ -211,6 +211,18 @@ final class ZipInstaller
         sort($result);
 
         return $result;
+    }
+
+    /** Данные сайта (_data, _updates) и рабочая папка обновлений не копируются в резервную копию и не удаляются при замене. */
+    private function isPreserved(string $relative): bool
+    {
+        foreach (array_filter([$this->skip, ...$this->profile->preserved]) as $prefix) {
+            if ($relative === $prefix || str_starts_with($relative, $prefix . '/')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function pruneBackups(string $workDir, int $keep): void

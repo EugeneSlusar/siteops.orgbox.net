@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 error_reporting(E_ALL);
 set_error_handler(static function (int $no, string $message, string $file, int $line): bool {
+    if (!(error_reporting() & $no)) {
+        return false; // подавлено оператором @: так и должно быть
+    }
     throw new ErrorException($message, 0, $no, $file, $line);
 });
 

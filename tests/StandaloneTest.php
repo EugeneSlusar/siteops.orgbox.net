@@ -6,6 +6,7 @@ require_once __DIR__ . '/Support/BitrixStubs.php';
 
 use OrgBox\SiteOps\Bootstrap;
 use OrgBox\SiteOps\Config\BitrixOptionStore;
+use OrgBox\SiteOps\Config\FileOptionStore;
 use OrgBox\SiteOps\Update\PackageProfile;
 use OrgBox\SiteOps\Update\UpdateException;
 use OrgBox\SiteOps\Update\ReleaseVerifier;
@@ -61,23 +62,53 @@ test('настройки: режим модуля — общие, режим sit
     assertSame('readwrite', (new BitrixOptionStore('s1'))->get('mode'), 'режим s1 не перезаписан общим значением');
 });
 
-test('Bootstrap: standalone берёт SITE_ID, определяет форму установки и рабочую папку', function (): void {
-    if (!defined('SITE_ID')) {
-        define('SITE_ID', 's2');
-    }
-    Bitrix\Main\Config\Option::$store = [];
-    $standalone = Bootstrap::standalone();
-    assertTrue($standalone->isStandalone());
-    assertSame('site.ops', $standalone->profile()->root);
-    assertSame($standalone->baseDir() . '/_updates', $standalone->workDir());
-    $standalone->settings()->generateToken();
-    assertTrue((new BitrixOptionStore(SITE_ID))->get('token_hash') !== '', 'токен записан именно для текущего сайта');
-    assertSame('', (new BitrixOptionStore(''))->get('token_hash', ''), 'и не попал в общие настройки');
+test('Bootstrap: site.ops хранит настройки в своём файле, а модуль — в b_option; рабочие папки внутри site.ops', function (): void {
+    $base = tempDir() . '/site.ops';
+    mkdir($base, 0755, true);
+    try {
+        $standalone = Bootstrap::standalone($base);
+        assertTrue($standalone->isStandalone());
+        assertSame('site.ops', $standalone->profile()->root);
+        assertSame($base . '/_updates', $standalone->workDir());
+        assertSame($base . '/_data/settings.php', $standalone->settingsFile());
+        assertTrue($standalone->optionStore() instanceof FileOptionStore);
 
-    $module = Bootstrap::module();
-    assertTrue(!$module->isStandalone());
-    assertSame(releaseVersion(), $module->version());
+        $token = $standalone->settings()->generateToken();
+        assertTrue(is_file($base . '/_data/settings.php'), 'токен записан в файл внутри site.ops');
+        assertTrue(!str_contains((string) file_get_contents($base . '/_data/settings.php'), $token), 'в файле только хэш токена');
+        assertSame(hash('sha256', $token), Bootstrap::standalone($base)->settings()->tokenHash(), 'другой запрос читает те же настройки');
+
+        $module = Bootstrap::module();
+        assertTrue(!$module->isStandalone());
+        assertTrue($module->optionStore() instanceof BitrixOptionStore);
+        assertSame(releaseVersion(), $module->version());
+    } finally {
+        removeDir(dirname($base));
+    }
 });
+
+test('Bootstrap: ключ сайта одинаков в админке и на публичных страницах и не зависит от SITE_ID', function (): void {
+    $old = $_SERVER['DOCUMENT_ROOT'] ?? null;
+    $root = tempDir();
+    try {
+        $_SERVER['DOCUMENT_ROOT'] = $root;
+        $key = Bootstrap::standalone($root . '/site.ops')->siteKey();
+        assertTrue((bool) preg_match('/^[a-f0-9]{8}$/', $key), $key);
+        assertSame($key, Bootstrap::standalone($root . '/site.ops')->siteKey());
+        $other = tempDir();
+        $_SERVER['DOCUMENT_ROOT'] = $other;
+        assertTrue($key !== Bootstrap::standalone($other . '/site.ops')->siteKey(), 'у разных сайтов разные ключи');
+        removeDir($other);
+    } finally {
+        $old === null ? Bootstrap_unsetRoot() : $_SERVER['DOCUMENT_ROOT'] = $old;
+        removeDir($root);
+    }
+});
+
+function Bootstrap_unsetRoot(): void
+{
+    unset($_SERVER['DOCUMENT_ROOT']);
+}
 
 // ---- сборка и установка site.ops ----------------------------------------------------------------
 
