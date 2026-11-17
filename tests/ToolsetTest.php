@@ -181,7 +181,7 @@ test('запись: недопустимое значение списка, не
     [$server] = toolsetServer($rw);
     assertContains('допустимые значения', callTool($server, 'element_update', ['id' => 10, 'properties' => ['COLOR' => 'Зелёный']])['text']);
     assertContains('не найдено', callTool($server, 'element_update', ['id' => 10, 'properties' => ['NOPE' => 1]])['text']);
-    assertContains('Файловое', callTool($server, 'element_update', ['id' => 10, 'properties' => ['PHOTO' => 'x']])['text']);
+    assertContains('файловое', callTool($server, 'element_update', ['id' => 10, 'properties' => ['PHOTO' => 'x']])['text']);
 });
 
 test('запись: несколько значений в не множественное свойство отклоняются', function () use ($rw): void {

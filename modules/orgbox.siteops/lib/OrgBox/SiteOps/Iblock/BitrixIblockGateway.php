@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OrgBox\SiteOps\Iblock;
 
 use Bitrix\Main\Loader;
+use OrgBox\SiteOps\Files\FilePropertyChange;
 use OrgBox\SiteOps\Files\FileUpload;
 use RuntimeException;
 
@@ -179,7 +180,15 @@ final class BitrixIblockGateway implements IblockGateway
             if ($code === '') {
                 continue;
             }
-            $value = $prop['PROPERTY_TYPE'] === 'L' ? (string) $prop['VALUE_ENUM'] : $prop['VALUE'];
+            if ($prop['PROPERTY_TYPE'] === 'F') {
+                // Файл: вместо числа — описание (id, адрес, имя, размер), чтобы файл можно было опознать и удалить по id.
+                $value = $this->pictureInfo($prop['VALUE']);
+                if ($value === null) {
+                    continue;
+                }
+            } else {
+                $value = $prop['PROPERTY_TYPE'] === 'L' ? (string) $prop['VALUE_ENUM'] : $prop['VALUE'];
+            }
             if ($prop['MULTIPLE'] === 'Y') {
                 $properties[$code][] = $value;
             } else {
@@ -215,15 +224,16 @@ final class BitrixIblockGateway implements IblockGateway
             if ($fields !== [] && !$element->Update($id, $this->toBitrixFields($fields, $temp))) {
                 throw new RuntimeException('Не удалось сохранить элемент: ' . $element->LAST_ERROR);
             }
+            if ($properties !== []) {
+                $current = $this->getElement($id);
+                if ($current === null) {
+                    throw new RuntimeException('Элемент исчез при сохранении.');
+                }
+                $iblockId = (int) $current['iblock_id'];
+                \CIBlockElement::SetPropertyValuesEx($id, $iblockId, $this->toBitrixProperties($id, $iblockId, $properties, $temp));
+            }
         } finally {
             $this->cleanup($temp);
-        }
-        if ($properties !== []) {
-            $current = $this->getElement($id);
-            if ($current === null) {
-                throw new RuntimeException('Элемент исчез при сохранении.');
-            }
-            \CIBlockElement::SetPropertyValuesEx($id, (int) $current['iblock_id'], $properties);
         }
     }
 
@@ -233,14 +243,14 @@ final class BitrixIblockGateway implements IblockGateway
         $temp = [];
         try {
             $id = (int) $element->Add(['IBLOCK_ID' => $iblockId] + $this->toBitrixFields($fields, $temp));
+            if ($id <= 0) {
+                throw new RuntimeException('Не удалось создать элемент: ' . $element->LAST_ERROR);
+            }
+            if ($properties !== []) {
+                \CIBlockElement::SetPropertyValuesEx($id, $iblockId, $this->toBitrixProperties($id, $iblockId, $properties, $temp));
+            }
         } finally {
             $this->cleanup($temp);
-        }
-        if ($id <= 0) {
-            throw new RuntimeException('Не удалось создать элемент: ' . $element->LAST_ERROR);
-        }
-        if ($properties !== []) {
-            \CIBlockElement::SetPropertyValuesEx($id, $iblockId, $properties);
         }
 
         return $id;
@@ -252,6 +262,139 @@ final class BitrixIblockGateway implements IblockGateway
         if (!$section->Update($id, $this->toBitrixFields($fields))) {
             throw new RuntimeException('Не удалось сохранить раздел: ' . $section->LAST_ERROR);
         }
+    }
+
+    public function listPriceTypes(): array
+    {
+        $this->catalog();
+        $result = [];
+        $rows = \CCatalogGroup::GetList(['SORT' => 'ASC', 'ID' => 'ASC'], [], false, false, ['ID', 'NAME', 'BASE', 'NAME_LANG']);
+        while ($row = $rows->Fetch()) {
+            $result[] = [
+                'id' => (int) $row['ID'],
+                'code' => (string) $row['NAME'],
+                'name' => (string) ($row['NAME_LANG'] ?? '') !== '' ? (string) $row['NAME_LANG'] : (string) $row['NAME'],
+                'base' => $row['BASE'] === 'Y',
+            ];
+        }
+
+        return $result;
+    }
+
+    public function getProduct(int $id): ?array
+    {
+        $this->catalog();
+        $product = \CCatalogProduct::GetByID($id);
+        if (!is_array($product)) {
+            return null;
+        }
+
+        $prices = [];
+        $rows = \CPrice::GetListEx(['CATALOG_GROUP_ID' => 'ASC', 'ID' => 'ASC'], ['PRODUCT_ID' => $id], false, false, ['ID', 'CATALOG_GROUP_ID', 'PRICE', 'CURRENCY', 'QUANTITY_FROM', 'QUANTITY_TO']);
+        while ($row = $rows->Fetch()) {
+            $prices[] = [
+                'type_id' => (int) $row['CATALOG_GROUP_ID'],
+                'price' => (float) $row['PRICE'],
+                'currency' => (string) $row['CURRENCY'],
+                'quantity_from' => $row['QUANTITY_FROM'] !== null && $row['QUANTITY_FROM'] !== '' ? (float) $row['QUANTITY_FROM'] : null,
+                'quantity_to' => $row['QUANTITY_TO'] !== null && $row['QUANTITY_TO'] !== '' ? (float) $row['QUANTITY_TO'] : null,
+            ];
+        }
+
+        $stores = [];
+        $rows = \CCatalogStore::GetList(['SORT' => 'ASC', 'ID' => 'ASC'], ['ACTIVE' => 'Y'], false, false, ['ID', 'TITLE', 'ADDRESS']);
+        while ($row = $rows->Fetch()) {
+            $title = (string) $row['TITLE'] !== '' ? (string) $row['TITLE'] : (string) $row['ADDRESS'];
+            $stores[(int) $row['ID']] = ['title' => $title !== '' ? $title : 'Склад ' . $row['ID'], 'amount' => 0.0];
+        }
+        $rows = \CCatalogStoreProduct::GetList([], ['PRODUCT_ID' => $id], false, false, ['STORE_ID', 'AMOUNT']);
+        while ($row = $rows->Fetch()) {
+            if (isset($stores[(int) $row['STORE_ID']])) {
+                $stores[(int) $row['STORE_ID']]['amount'] = (float) $row['AMOUNT'];
+            }
+        }
+
+        $offers = [];
+        if ((int) $product['TYPE'] === 3 && class_exists('\\CCatalogSKU')) { // 3 — товар с торговыми предложениями
+            $list = \CCatalogSKU::getOffersList([$id], 0, [], ['ID', 'NAME']);
+            foreach (($list[$id] ?? []) as $offer) {
+                $offers[] = ['id' => (int) $offer['ID'], 'name' => (string) ($offer['NAME'] ?? '')];
+            }
+        }
+
+        return [
+            'quantity' => (float) $product['QUANTITY'],
+            'reserved' => (float) ($product['QUANTITY_RESERVED'] ?? 0),
+            'available' => ($product['AVAILABLE'] ?? 'N') === 'Y',
+            'type' => (int) $product['TYPE'],
+            'prices' => $prices,
+            'stores' => $stores,
+            'offers' => $offers,
+        ];
+    }
+
+    public function updateProduct(int $id, array $prices, ?float $quantity, array $stores): void
+    {
+        $this->catalog();
+        if (!is_array(\CCatalogProduct::GetByID($id))) {
+            throw new RuntimeException('Элемент ' . $id . ' не является товаром каталога.');
+        }
+
+        $base = [];
+        foreach ($this->listPriceTypes() as $type) {
+            $base[$type['id']] = $type['base'];
+        }
+        foreach ($prices as $typeId => $item) {
+            $existing = null;
+            $rows = \CPrice::GetListEx([], ['PRODUCT_ID' => $id, 'CATALOG_GROUP_ID' => $typeId], false, false, ['ID', 'CURRENCY', 'QUANTITY_FROM', 'QUANTITY_TO']);
+            while ($row = $rows->Fetch()) {
+                $general = ($row['QUANTITY_FROM'] === null || $row['QUANTITY_FROM'] === '') && ($row['QUANTITY_TO'] === null || $row['QUANTITY_TO'] === '');
+                if ($general || $existing === null) {
+                    $existing = $row;
+                }
+            }
+            $currency = $item['currency'] ?? ($existing['CURRENCY'] ?? null) ?? \Bitrix\Currency\CurrencyManager::getBaseCurrency();
+            $fields = ['PRODUCT_ID' => $id, 'CATALOG_GROUP_ID' => $typeId, 'PRICE' => $item['price'], 'CURRENCY' => $currency];
+
+            if (!empty($base[$typeId])) {
+                $ok = \CPrice::SetBasePrice($id, $item['price'], $currency);
+            } elseif ($existing !== null) {
+                $ok = \CPrice::Update((int) $existing['ID'], $fields);
+            } else {
+                $ok = \CPrice::Add($fields);
+            }
+            if (!$ok) {
+                throw new RuntimeException('Не удалось записать цену типа ' . $typeId . ': ' . $this->catalogError());
+            }
+        }
+
+        foreach ($stores as $storeId => $amount) {
+            $row = \CCatalogStoreProduct::GetList([], ['PRODUCT_ID' => $id, 'STORE_ID' => $storeId], false, false, ['ID'])->Fetch();
+            $ok = $row
+                ? \CCatalogStoreProduct::Update((int) $row['ID'], ['AMOUNT' => $amount])
+                : \CCatalogStoreProduct::Add(['PRODUCT_ID' => $id, 'STORE_ID' => $storeId, 'AMOUNT' => $amount]);
+            if (!$ok) {
+                throw new RuntimeException('Не удалось записать остаток на складе ' . $storeId . ': ' . $this->catalogError());
+            }
+        }
+
+        if ($quantity !== null && !\CCatalogProduct::Update($id, ['QUANTITY' => $quantity])) {
+            throw new RuntimeException('Не удалось записать остаток: ' . $this->catalogError());
+        }
+    }
+
+    private function catalog(): void
+    {
+        if (!Loader::includeModule('catalog')) {
+            throw new RuntimeException('Модуль торгового каталога (catalog) недоступен.');
+        }
+    }
+
+    private function catalogError(): string
+    {
+        $exception = $GLOBALS['APPLICATION']->GetException();
+
+        return is_object($exception) ? (string) $exception->GetString() : 'причина не указана';
     }
 
     public function clearCache(?int $iblockId): void
@@ -269,6 +412,64 @@ final class BitrixIblockGateway implements IblockGateway
         if (isset($GLOBALS['stackCacheManager']) && is_object($GLOBALS['stackCacheManager'])) {
             $GLOBALS['stackCacheManager']->CleanAll();
         }
+    }
+
+    /**
+     * Свойства → формат SetPropertyValuesEx.
+     *  - пустой список ([]) очищает свойство: Битрикс игнорирует пустой массив, очищает его только null;
+     *  - изменение файлового свойства превращается в значения «по ID значения»: оставшиеся файлы сохраняются,
+     *    удаляемые помечаются del, новые получают ключи n0, n1…
+     *
+     * @param array<string,mixed> $properties
+     * @param list<string> $temp
+     * @return array<string,mixed>
+     */
+    private function toBitrixProperties(int $id, int $iblockId, array $properties, array &$temp): array
+    {
+        $result = [];
+        foreach ($properties as $code => $value) {
+            if ($value instanceof FilePropertyChange) {
+                $result[$code] = $this->fileValues($id, $iblockId, (string) $code, $value, $temp);
+            } elseif ($value === [] || (is_array($value) && array_filter($value, static fn ($v): bool => $v !== null) === [])) {
+                $result[$code] = null;
+            } else {
+                $result[$code] = $value;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param list<string> $temp
+     * @return array<string|int,array<string,mixed>>
+     */
+    private function fileValues(int $id, int $iblockId, string $code, FilePropertyChange $change, array &$temp): array
+    {
+        $property = \CIBlockProperty::GetList([], ['IBLOCK_ID' => $iblockId, 'CODE' => $code])->Fetch();
+        if (!$property || $property['PROPERTY_TYPE'] !== 'F') {
+            throw new RuntimeException('Свойство ' . $code . ' не файловое.');
+        }
+        $multiple = $property['MULTIPLE'] === 'Y';
+        $replaceAll = !$multiple && $change->add !== [];
+
+        $values = [];
+        $rows = \CIBlockElement::GetProperty($iblockId, $id, ['SORT' => 'ASC', 'ID' => 'ASC'], ['CODE' => $code]);
+        while ($row = $rows->Fetch()) {
+            $fileId = (int) $row['VALUE'];
+            if ($fileId <= 0) {
+                continue;
+            }
+            $valueId = (int) $row['PROPERTY_VALUE_ID'];
+            $values[$valueId] = in_array($fileId, $change->delete, true) || $replaceAll
+                ? ['VALUE' => ['del' => 'Y']]
+                : ['VALUE' => $fileId, 'DESCRIPTION' => (string) $row['DESCRIPTION']];
+        }
+        foreach ($change->add as $index => $upload) {
+            $values['n' . $index] = ['VALUE' => $this->fileArray($upload, $temp)];
+        }
+
+        return $values;
     }
 
     /**

@@ -6,6 +6,7 @@ namespace OrgBox\SiteOps\Tools;
 
 use OrgBox\SiteOps\Audit\AuditLogger;
 use OrgBox\SiteOps\Config\Settings;
+use OrgBox\SiteOps\Files\FilePropertyChange;
 use OrgBox\SiteOps\Files\FileUpload;
 use OrgBox\SiteOps\Files\ImageLoader;
 use OrgBox\SiteOps\Iblock\IblockGateway;
@@ -39,6 +40,14 @@ final class IblockToolset
     private const FIELDS_HELP = 'Допустимые поля: NAME, CODE, ACTIVE, SORT, PREVIEW_TEXT, DETAIL_TEXT, PREVIEW_TEXT_TYPE, DETAIL_TEXT_TYPE, IBLOCK_SECTION_ID, '
         . 'PREVIEW_PICTURE, DETAIL_PICTURE. Картинка — объект {"url": "https://…"} или {"base64": "…", "name": "photo.jpg"} '
         . '(JPEG, PNG, WebP, GIF, до 10 МБ); прежний файл заменяется. Удалить картинку нельзя.';
+
+    private const PROPERTIES_HELP = 'Свойства: код => значение. Строка/число — одно значение; список [..] — множественное свойство, '
+        . 'пустой список [] или null очищает свойство. Свойство-список (L) задаётся текстом значения. '
+        . 'Файловые свойства (тип F, например MORE_PHOTO, INSTRUCTIONS): {"base64": "…", "name": "a.jpg"} или {"url": "https://…"} добавляет файл '
+        . '(у не множественного свойства заменяет прежний), список таких объектов добавляет несколько; '
+        . '{"delete": [ID файлов]} удаляет отдельные файлы (ID берите из element_get), можно вместе: {"add": [...], "delete": [...]}. '
+        . 'Остальные файлы свойства сохраняются. Допустимы JPEG, PNG, WebP, GIF и PDF, до 10 МБ. '
+        . 'В ответе значения читаются из базы заново; verified=false и not_applied говорят, что запись не применилась.';
 
     public function __construct(
         private IblockGateway $gateway,
@@ -87,12 +96,32 @@ final class IblockToolset
             'type' => 'object', 'properties' => ['id' => $int], 'required' => ['id'],
         ], false, fn (array $a): array => $this->elementGet($a)));
 
-        $registry->register(new Tool('element_update', 'Изменить поля и свойства элемента. Удаления нет; снять с публикации можно через active=false.', [
+        $registry->register(new Tool('element_filled_properties', 'Только заполненные свойства элемента, с названиями (код, название, тип, значение). Удобно для каталога, где свойств больше 150.', [
+            'type' => 'object', 'properties' => ['id' => $int], 'required' => ['id'],
+        ], false, fn (array $a): array => $this->elementFilledProperties($a)));
+
+        $registry->register(new Tool('product_get', 'Цены и остатки товара или торгового предложения из модуля catalog (id элемента): цены по типам, общий остаток, остатки по складам, список торговых предложений. Цена лежит в каталоге, а не в свойствах.', [
+            'type' => 'object', 'properties' => ['id' => $int], 'required' => ['id'],
+        ], false, fn (array $a): array => $this->productGet($a)));
+
+        $registry->register(new Tool('product_update', 'Записать цены и остатки товара или торгового предложения. prices: {"тип цены (id или код, например BASE)": число или {"price": число, "currency": "RUB"}}; quantity: общий остаток; stores: {"id склада": количество}. При складском учёте общий остаток считается из складов, задавайте stores. После записи значения перечитываются.', [
+            'type' => 'object',
+            'properties' => [
+                'id' => $int,
+                'prices' => ['type' => 'object'],
+                'quantity' => ['type' => 'number', 'minimum' => 0],
+                'stores' => ['type' => 'object'],
+                'dry_run' => $dryRun,
+            ],
+            'required' => ['id'],
+        ], true, fn (array $a): array => $this->productUpdate($a)));
+
+        $registry->register(new Tool('element_update', 'Изменить поля, свойства и файлы элемента. Удаления элемента нет; снять с публикации можно через ACTIVE=false. После записи значения перечитываются из базы.', [
             'type' => 'object',
             'properties' => [
                 'id' => $int,
                 'fields' => ['type' => 'object', 'description' => self::FIELDS_HELP],
-                'properties' => ['type' => 'object', 'description' => 'Свойства: код => значение. Файловые свойства не поддерживаются.'],
+                'properties' => ['type' => 'object', 'description' => self::PROPERTIES_HELP],
                 'dry_run' => $dryRun,
             ],
             'required' => ['id'],
@@ -103,7 +132,7 @@ final class IblockToolset
             'properties' => [
                 'iblock_id' => $int,
                 'fields' => ['type' => 'object', 'description' => 'NAME обязателен. ' . self::FIELDS_HELP],
-                'properties' => ['type' => 'object'],
+                'properties' => ['type' => 'object', 'description' => self::PROPERTIES_HELP],
                 'dry_run' => $dryRun,
             ],
             'required' => ['iblock_id', 'fields'],
@@ -195,6 +224,75 @@ final class IblockToolset
         return $element;
     }
 
+    /** @return array<string,mixed> */
+    private function elementFilledProperties(array $args): array
+    {
+        $element = $this->gateway->getElement($this->intArg($args['id'] ?? null, 'id'));
+        if ($element === null) {
+            throw new ToolException('Элемент не найден.');
+        }
+        $iblockId = $this->readableIblock($element['iblock_id'] ?? null);
+
+        $meta = [];
+        foreach ($this->gateway->getProperties($iblockId) as $property) {
+            $meta[$property['code']] = $property;
+        }
+        $values = $element['properties'] ?? [];
+        $filled = [];
+        // Сначала в порядке свойств инфоблока, затем те, что в описании не нашлись (например, неактивные).
+        foreach (array_unique(array_merge(array_keys($meta), array_keys($values))) as $code) {
+            if ($this->canonical($values[$code] ?? null) === null) {
+                continue;
+            }
+            $filled[] = [
+                'code' => (string) $code,
+                'name' => $meta[$code]['name'] ?? (string) $code,
+                'type' => $meta[$code]['type'] ?? '',
+                'multiple' => $meta[$code]['multiple'] ?? is_array($values[$code]) && array_is_list($values[$code]),
+                'value' => $values[$code],
+            ];
+        }
+
+        return ['id' => $element['id'], 'iblock_id' => $iblockId, 'name' => $element['name'], 'count' => count($filled), 'properties' => $filled];
+    }
+
+    private const PRODUCT_TYPES = [1 => 'simple', 2 => 'set', 3 => 'with_offers', 4 => 'offer', 5 => 'empty_with_offers', 6 => 'service'];
+
+    /** @return array<string,mixed> */
+    private function productGet(array $args): array
+    {
+        $id = $this->intArg($args['id'] ?? null, 'id');
+        $element = $this->gateway->getElement($id) ?? throw new ToolException('Элемент не найден.');
+        $this->readableIblock($element['iblock_id'] ?? null);
+        $product = $this->gateway->getProduct($id) ?? throw new ToolException('Элемент ' . $id . ' не товар каталога: цен и остатков у него нет.');
+
+        $types = [];
+        foreach ($this->gateway->listPriceTypes() as $type) {
+            $types[$type['id']] = $type;
+        }
+        $prices = [];
+        foreach ($product['prices'] as $price) {
+            $type = $types[$price['type_id']] ?? ['code' => '', 'name' => '', 'base' => false];
+            $prices[] = [
+                'type_id' => $price['type_id'], 'type' => $type['code'], 'type_name' => $type['name'], 'base' => $type['base'],
+                'price' => $price['price'], 'currency' => $price['currency'],
+                'quantity_from' => $price['quantity_from'], 'quantity_to' => $price['quantity_to'],
+            ];
+        }
+        $stores = [];
+        foreach ($product['stores'] as $storeId => $store) {
+            $stores[] = ['id' => $storeId, 'title' => $store['title'], 'amount' => $store['amount']];
+        }
+
+        return [
+            'id' => $id, 'iblock_id' => $element['iblock_id'], 'name' => $element['name'],
+            'product_type' => self::PRODUCT_TYPES[$product['type']] ?? 'other',
+            'quantity' => $product['quantity'], 'reserved' => $product['reserved'], 'available' => $product['available'],
+            'prices' => $prices, 'stores' => $stores, 'offers' => $product['offers'],
+            'price_types' => array_values($types),
+        ];
+    }
+
     // ---- запись -------------------------------------------------------------------------------
 
     /** @return array<string,mixed> */
@@ -205,7 +303,7 @@ final class IblockToolset
         $iblockId = $this->writableIblock($before['iblock_id'] ?? null);
 
         $fields = $this->normalizeFields($this->objectArg($args, 'fields'), self::ELEMENT_FIELDS);
-        [$properties, $shownProperties] = $this->normalizeProperties($iblockId, $this->objectArg($args, 'properties'));
+        [$properties, $shownProperties] = $this->normalizeProperties($iblockId, $this->objectArg($args, 'properties'), $before['properties'] ?? []);
         if ($fields === [] && $properties === []) {
             throw new ToolException('Нечего изменять: передайте fields или properties.');
         }
@@ -219,9 +317,14 @@ final class IblockToolset
         }
 
         $this->gateway->updateElement($id, $fields, $properties);
-        $this->audit->log('element.update', ['id' => $id, 'iblock_id' => $iblockId, 'changes' => $this->shorten($changes)]);
 
-        return ['updated' => true, 'id' => $id, 'changes' => $changes];
+        // Ответ строится по тому, что реально лежит в базе, а не по тому, что мы отправили.
+        $after = $this->gateway->getElement($id) ?? throw new ToolException('Элемент пропал после записи.');
+        [$report, $notApplied] = $this->verify($changes, $before, $after);
+        $this->audit->log('element.update', ['id' => $id, 'iblock_id' => $iblockId, 'changes' => $this->shorten($report), 'not_applied' => $notApplied]);
+
+        return ['updated' => true, 'id' => $id, 'changes' => $report, 'verified' => $notApplied === []]
+            + ($notApplied === [] ? [] : ['not_applied' => $notApplied]);
     }
 
     /** @return array<string,mixed> */
@@ -236,13 +339,159 @@ final class IblockToolset
         [$properties, $shownProperties] = $this->normalizeProperties($iblockId, $this->objectArg($args, 'properties'));
 
         if (!empty($args['dry_run'])) {
-            return ['dry_run' => true, 'iblock_id' => $iblockId, 'would_create' => ['fields' => $this->shorten($fields), 'properties' => $shownProperties]];
+            return ['dry_run' => true, 'iblock_id' => $iblockId, 'would_create' => ['fields' => $this->shorten($fields), 'properties' => $this->shorten($shownProperties)]];
         }
 
         $id = $this->gateway->createElement($iblockId, $fields, $properties);
         $this->audit->log('element.create', ['id' => $id, 'iblock_id' => $iblockId, 'fields' => $this->shorten($fields)]);
 
         return ['created' => true, 'id' => $id];
+    }
+
+    /** @return array<string,mixed> */
+    private function productUpdate(array $args): array
+    {
+        $id = $this->intArg($args['id'] ?? null, 'id');
+        $element = $this->gateway->getElement($id) ?? throw new ToolException('Элемент не найден.');
+        $this->writableIblock($element['iblock_id'] ?? null);
+        $before = $this->gateway->getProduct($id) ?? throw new ToolException('Элемент ' . $id . ' не товар каталога: цен и остатков у него нет.');
+
+        $prices = $this->priceArgs($this->objectArg($args, 'prices'));
+        $quantity = array_key_exists('quantity', $args) && $args['quantity'] !== null ? $this->amount($args['quantity'], 'quantity') : null;
+        $stores = [];
+        foreach ($this->objectArg($args, 'stores') as $storeId => $amount) {
+            if (!ctype_digit((string) $storeId) || !isset($before['stores'][(int) $storeId])) {
+                throw new ToolException('Склад ' . $storeId . ' не найден. Доступные: ' . implode(', ', array_map(static fn ($k, $v): string => $k . ' (' . $v['title'] . ')', array_keys($before['stores']), $before['stores'])) . '.');
+            }
+            $stores[(int) $storeId] = $this->amount($amount, 'stores.' . $storeId);
+        }
+        if ($prices === [] && $quantity === null && $stores === []) {
+            throw new ToolException('Нечего изменять: передайте prices, quantity или stores.');
+        }
+
+        $changes = [];
+        foreach ($prices as $typeId => $item) {
+            $old = $this->generalPrice($before, $typeId);
+            $planned = ['price' => $item['price'], 'currency' => $item['currency'] ?? ($old['currency'] ?? null)];
+            if ($old === null || abs($old['price'] - $planned['price']) > 1e-9 || ($planned['currency'] !== null && $old['currency'] !== $planned['currency'])) {
+                $changes['PRICE_' . $typeId] = ['before' => $old === null ? null : ['price' => $old['price'], 'currency' => $old['currency']], 'after' => $planned];
+            }
+        }
+        if ($quantity !== null && abs($before['quantity'] - $quantity) > 1e-9) {
+            $changes['QUANTITY'] = ['before' => $before['quantity'], 'after' => $quantity];
+        }
+        foreach ($stores as $storeId => $amount) {
+            if (abs($before['stores'][$storeId]['amount'] - $amount) > 1e-9) {
+                $changes['STORE_' . $storeId] = ['before' => $before['stores'][$storeId]['amount'], 'after' => $amount];
+            }
+        }
+        if ($changes === []) {
+            return ['updated' => false, 'id' => $id, 'message' => 'Значения уже совпадают, изменений нет.'];
+        }
+        if (!empty($args['dry_run'])) {
+            return ['dry_run' => true, 'id' => $id, 'changes' => $changes];
+        }
+
+        $this->gateway->updateProduct($id, $prices, $quantity, $stores);
+
+        $after = $this->gateway->getProduct($id) ?? throw new ToolException('Товар пропал после записи.');
+        $report = [];
+        $notApplied = [];
+        foreach ($changes as $key => $change) {
+            if (str_starts_with($key, 'PRICE_')) {
+                $actual = $this->generalPrice($after, (int) substr($key, 6));
+                $actual = $actual === null ? null : ['price' => $actual['price'], 'currency' => $actual['currency']];
+                $expected = $change['after'];
+                $applied = $actual !== null && abs($actual['price'] - $expected['price']) < 1e-9
+                    && ($expected['currency'] === null || $expected['currency'] === $actual['currency']);
+            } elseif ($key === 'QUANTITY') {
+                $actual = $after['quantity'];
+                $applied = abs($actual - $change['after']) < 1e-9;
+            } else {
+                $actual = $after['stores'][(int) substr($key, 6)]['amount'] ?? null;
+                $applied = $actual !== null && abs($actual - $change['after']) < 1e-9;
+            }
+            $report[$key] = ['before' => $change['before'], 'after' => $actual];
+            if (!$applied) {
+                $report[$key]['expected'] = $change['after'];
+                $notApplied[] = $key;
+            }
+        }
+        $this->audit->log('product.update', ['id' => $id, 'iblock_id' => $element['iblock_id'], 'changes' => $report, 'not_applied' => $notApplied]);
+
+        return ['updated' => true, 'id' => $id, 'changes' => $report, 'verified' => $notApplied === []]
+            + ($notApplied === [] ? [] : ['not_applied' => $notApplied]);
+    }
+
+    /**
+     * @param array<string,mixed> $prices
+     * @return array<int,array{price:float,currency:?string}>
+     */
+    private function priceArgs(array $prices): array
+    {
+        if ($prices === []) {
+            return [];
+        }
+        $types = $this->gateway->listPriceTypes();
+        $result = [];
+        foreach ($prices as $key => $value) {
+            $typeId = null;
+            foreach ($types as $type) {
+                if ((string) $type['id'] === (string) $key || strcasecmp($type['code'], (string) $key) === 0) {
+                    $typeId = $type['id'];
+                    break;
+                }
+            }
+            if ($typeId === null) {
+                throw new ToolException('Тип цены ' . $key . ' не найден. Доступные: ' . implode(', ', array_map(static fn (array $t): string => $t['id'] . ' (' . $t['code'] . ')', $types)) . '.');
+            }
+            $currency = null;
+            if (is_array($value)) {
+                $unknown = array_diff(array_keys($value), ['price', 'currency']);
+                if ($unknown !== [] || !array_key_exists('price', $value)) {
+                    throw new ToolException('Цена ' . $key . ': нужен объект {"price": число, "currency": "RUB"} или просто число.');
+                }
+                if (array_key_exists('currency', $value) && $value['currency'] !== null) {
+                    if (!is_string($value['currency']) || !preg_match('/^[A-Z]{3}$/', $value['currency'])) {
+                        throw new ToolException('Цена ' . $key . ': валюта — трёхбуквенный код, например RUB.');
+                    }
+                    $currency = $value['currency'];
+                }
+                $value = $value['price'];
+            }
+            $result[$typeId] = ['price' => round($this->amount($value, 'prices.' . $key), 2), 'currency' => $currency];
+        }
+
+        return $result;
+    }
+
+    private function amount(mixed $value, string $name): float
+    {
+        if (is_string($value) && is_numeric($value)) {
+            $value = $value + 0;
+        }
+        if ((!is_int($value) && !is_float($value)) || $value < 0 || $value > 1000000000) {
+            throw new ToolException('Параметр ' . $name . ' должен быть числом от 0 до 1000000000.');
+        }
+
+        return (float) $value;
+    }
+
+    /**
+     * Обычная цена типа (без ограничений по количеству).
+     *
+     * @param array<string,mixed> $product
+     * @return array{price:float,currency:string}|null
+     */
+    private function generalPrice(array $product, int $typeId): ?array
+    {
+        foreach ($product['prices'] as $price) {
+            if ($price['type_id'] === $typeId && $price['quantity_from'] === null && $price['quantity_to'] === null) {
+                return ['price' => $price['price'], 'currency' => $price['currency']];
+            }
+        }
+
+        return null;
     }
 
     /** @return array<string,mixed> */
@@ -418,9 +667,10 @@ final class IblockToolset
 
     /**
      * @param array<string,mixed> $properties
+     * @param array<string,mixed> $current текущие значения свойств элемента (для проверки удаляемых файлов)
      * @return array{0:array<string,mixed>,1:array<string,mixed>} [значения для записи, значения для сравнения и показа]
      */
-    private function normalizeProperties(int $iblockId, array $properties): array
+    private function normalizeProperties(int $iblockId, array $properties, array $current = []): array
     {
         if ($properties === []) {
             return [[], []];
@@ -435,7 +685,10 @@ final class IblockToolset
         foreach ($properties as $code => $value) {
             $property = $known[$code] ?? throw new ToolException('Свойство ' . $code . ' не найдено в инфоблоке ' . $iblockId . '.');
             if ($property['type'] === 'F') {
-                throw new ToolException('Файловое свойство ' . $code . ' через этот интерфейс изменять нельзя.');
+                $change = $this->fileChange((string) $code, $property, $value, $this->fileIds($current[$code] ?? null));
+                $result[$code] = $change;
+                $display[$code] = $change;
+                continue;
             }
             $values = is_array($value) ? array_values($value) : [$value];
             if (!$property['multiple'] && count($values) > 1) {
@@ -449,11 +702,87 @@ final class IblockToolset
                 // Список: Битрикс отдаёт текст значения, а пишется идентификатор.
                 $shown[] = $property['type'] === 'L' && $writeValue !== null ? $property['enum'][$writeValue] : $writeValue;
             }
+            // Пустой список очищает множественное свойство.
             $result[$code] = $property['multiple'] ? $mapped : ($mapped[0] ?? null);
             $display[$code] = $property['multiple'] ? $shown : ($shown[0] ?? null);
         }
 
         return [$result, $display];
+    }
+
+    /**
+     * @param array<string,mixed> $property
+     * @param list<int> $currentIds ID файлов, которые сейчас лежат в свойстве
+     */
+    private function fileChange(string $code, array $property, mixed $value, array $currentIds): FilePropertyChange
+    {
+        $hint = 'Свойство ' . $code . ' файловое: добавить — {"base64": "…"} или {"url": "https://…"}, удалить — {"delete": [ID файлов]} (ID виден в element_get).';
+        if (!is_array($value) || $value === []) {
+            throw new ToolException($hint . ' Очистить свойство целиком через null или [] нельзя.');
+        }
+
+        $addSpecs = [];
+        $deleteSpec = [];
+        if (array_is_list($value)) {
+            $addSpecs = $value;
+        } elseif (array_key_exists('add', $value) || array_key_exists('delete', $value)) {
+            $unknown = array_diff(array_keys($value), ['add', 'delete']);
+            if ($unknown !== []) {
+                throw new ToolException('Свойство ' . $code . ': неизвестные ключи ' . implode(', ', $unknown) . '. ' . $hint);
+            }
+            $add = $value['add'] ?? [];
+            $addSpecs = is_array($add) && !array_is_list($add) ? [$add] : (array) $add;
+            $deleteSpec = $value['delete'] ?? [];
+            $deleteSpec = is_array($deleteSpec) ? $deleteSpec : [$deleteSpec];
+        } else {
+            $addSpecs = [$value];
+        }
+
+        $loader = $this->images ?? new ImageLoader();
+        $uploads = [];
+        foreach ($addSpecs as $spec) {
+            if (!is_array($spec) || $spec === [] || array_is_list($spec)) {
+                throw new ToolException($hint);
+            }
+            $uploads[] = $loader->load($code, $spec, true);
+        }
+        if (!$property['multiple'] && count($uploads) > 1) {
+            throw new ToolException('Свойство ' . $code . ' не множественное: можно загрузить только один файл.');
+        }
+
+        $delete = [];
+        foreach ($deleteSpec as $fileId) {
+            if (is_string($fileId) && ctype_digit($fileId)) {
+                $fileId = (int) $fileId;
+            }
+            if (!is_int($fileId) || !in_array($fileId, $currentIds, true)) {
+                throw new ToolException('Свойство ' . $code . ': файла ' . (is_scalar($fileId) ? $fileId : '?') . ' в этом элементе нет. Сейчас в свойстве: ' . ($currentIds === [] ? 'пусто' : implode(', ', $currentIds)) . '.');
+            }
+            $delete[] = $fileId;
+        }
+        $delete = array_values(array_unique($delete));
+        if ($uploads === [] && $delete === []) {
+            throw new ToolException($hint);
+        }
+
+        return new FilePropertyChange($uploads, $delete);
+    }
+
+    /** @return list<int> ID файлов из значения файлового свойства (описание файла или список описаний) */
+    private function fileIds(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+        $items = isset($value['id']) ? [$value] : $value;
+        $ids = [];
+        foreach ($items as $item) {
+            if (is_array($item) && isset($item['id'])) {
+                $ids[] = (int) $item['id'];
+            }
+        }
+
+        return $ids;
     }
 
     /** @param array<string,mixed> $property */
@@ -506,7 +835,9 @@ final class IblockToolset
         }
         foreach ($properties as $code => $value) {
             $old = $before['properties'][$code] ?? null;
-            if ($old !== $value) {
+            if ($value instanceof FilePropertyChange) {
+                $changes['PROPERTY_' . $code] = ['before' => $old, 'after' => $value->describe()];
+            } elseif (!$this->sameValue($old, $value)) {
                 $changes['PROPERTY_' . $code] = ['before' => $old, 'after' => $value];
             }
         }
@@ -514,9 +845,84 @@ final class IblockToolset
         return $changes;
     }
 
+    /**
+     * Сверка запланированного с тем, что реально прочитано из базы после записи.
+     *
+     * @param array<string,array{before:mixed,after:mixed}> $changes
+     * @param array<string,mixed> $before
+     * @param array<string,mixed> $after
+     * @return array{0:array<string,array<string,mixed>>,1:list<string>} [отчёт по изменениям, ключи, которые не применились]
+     */
+    private function verify(array $changes, array $before, array $after): array
+    {
+        $map = ['IBLOCK_SECTION_ID' => 'section_id'];
+        $report = [];
+        $notApplied = [];
+        foreach ($changes as $key => $change) {
+            $expected = $change['after'];
+            if (str_starts_with($key, 'PROPERTY_')) {
+                $code = substr($key, 9);
+                $actual = $after['properties'][$code] ?? null;
+                if (is_array($expected) && array_key_exists('add', $expected)) {
+                    $oldIds = $this->fileIds($before['properties'][$code] ?? null);
+                    $newIds = $this->fileIds($actual);
+                    $added = count(array_diff($newIds, $oldIds));
+                    $applied = $added >= count($expected['add']) && array_intersect($expected['delete'], $newIds) === [];
+                } else {
+                    $applied = $this->sameValue($actual, $expected);
+                }
+            } else {
+                $field = $map[$key] ?? strtolower($key);
+                $actual = $after[$field] ?? null;
+                if (is_array($expected) && array_key_exists('size', $expected)) {
+                    // Картинка: применено, если в поле теперь другой файл.
+                    $applied = is_array($actual) && ($actual['id'] ?? null) !== ($before[$field]['id'] ?? null);
+                } else {
+                    $applied = $actual === $expected;
+                }
+            }
+            $report[$key] = ['before' => $change['before'], 'after' => $actual];
+            if (!$applied) {
+                $report[$key]['expected'] = $expected;
+                $notApplied[] = $key;
+            }
+        }
+
+        return [$report, $notApplied];
+    }
+
+    /** Значения равны, если пустые одинаково (null, '', []), а списки совпадают без учёта порядка и типа чисел. */
+    private function sameValue(mixed $a, mixed $b): bool
+    {
+        return $this->canonical($a) === $this->canonical($b);
+    }
+
+    private function canonical(mixed $value): mixed
+    {
+        if ($value === null || $value === '' || $value === []) {
+            return null;
+        }
+        if (is_array($value)) {
+            $items = [];
+            foreach (array_values($value) as $item) {
+                $item = $this->canonical($item);
+                if ($item !== null) {
+                    $items[] = $item;
+                }
+            }
+            if ($items !== [] && array_filter($items, 'is_scalar') === $items) {
+                sort($items, SORT_STRING);
+            }
+
+            return $items === [] ? null : $items;
+        }
+
+        return is_scalar($value) ? (is_bool($value) ? $value : (string) $value) : $value;
+    }
+
     private function shorten(mixed $value): mixed
     {
-        if ($value instanceof FileUpload) {
+        if ($value instanceof FileUpload || $value instanceof FilePropertyChange) {
             return $value->describe();
         }
         if (is_array($value)) {

@@ -7,9 +7,10 @@ namespace OrgBox\SiteOps\Files;
 use OrgBox\SiteOps\Mcp\ToolException;
 
 /**
- * Превращает описание картинки из аргументов инструмента в проверенный FileUpload.
+ * Превращает описание файла из аргументов инструмента в проверенный FileUpload.
  * Принимает {"url": "https://…"} или {"base64": "…", "name": "photo.jpg"}.
- * Тип определяется по содержимому, а не по расширению; допускаются только JPEG, PNG, WebP и GIF.
+ * Тип определяется по содержимому, а не по расширению; допускаются JPEG, PNG, WebP и GIF,
+ * а для файловых свойств (allowDocuments) ещё и PDF.
  */
 final class ImageLoader
 {
@@ -27,7 +28,7 @@ final class ImageLoader
     }
 
     /** @param array<string,mixed> $spec */
-    public function load(string $field, array $spec): FileUpload
+    public function load(string $field, array $spec, bool $allowDocuments = false): FileUpload
     {
         $unknown = array_diff(array_keys($spec), ['url', 'base64', 'name']);
         if ($unknown !== []) {
@@ -56,13 +57,7 @@ final class ImageLoader
             $source = '';
         }
         if (strlen($bytes) > self::MAX_BYTES) {
-            throw new ToolException('Поле ' . $field . ': картинка больше ' . intdiv(self::MAX_BYTES, 1048576) . ' МБ.');
-        }
-
-        $info = @getimagesizefromstring($bytes);
-        $mime = is_array($info) ? (string) ($info['mime'] ?? '') : '';
-        if (!isset(self::TYPES[$mime]) || $info[0] < 1 || $info[1] < 1) {
-            throw new ToolException('Поле ' . $field . ': это не JPEG, PNG, WebP или GIF.');
+            throw new ToolException('Поле ' . $field . ': файл больше ' . intdiv(self::MAX_BYTES, 1048576) . ' МБ.');
         }
 
         $name = $spec['name'] ?? basename($source);
@@ -70,15 +65,25 @@ final class ImageLoader
             throw new ToolException('Поле ' . $field . ': name должно быть строкой.');
         }
 
+        if ($allowDocuments && str_starts_with($bytes, '%PDF-')) {
+            return new FileUpload($this->safeName($name, 'pdf', 'document'), 'application/pdf', $bytes, 0, 0);
+        }
+
+        $info = @getimagesizefromstring($bytes);
+        $mime = is_array($info) ? (string) ($info['mime'] ?? '') : '';
+        if (!isset(self::TYPES[$mime]) || $info[0] < 1 || $info[1] < 1) {
+            throw new ToolException('Поле ' . $field . ': это не JPEG, PNG, WebP' . ($allowDocuments ? ', GIF или PDF.' : ' или GIF.'));
+        }
+
         return new FileUpload($this->safeName($name, self::TYPES[$mime]), $mime, $bytes, (int) $info[0], (int) $info[1]);
     }
 
     /** Имя файла только из безопасных символов, расширение всегда по реальному типу. */
-    private function safeName(string $name, string $extension): string
+    private function safeName(string $name, string $extension, string $fallback = 'image'): string
     {
         $base = pathinfo($name, PATHINFO_FILENAME);
         $base = trim((string) preg_replace('/[^A-Za-z0-9_-]+/', '-', $base), '-');
 
-        return ($base !== '' ? substr($base, 0, 80) : 'image') . '.' . $extension;
+        return ($base !== '' ? substr($base, 0, 80) : $fallback) . '.' . $extension;
     }
 }

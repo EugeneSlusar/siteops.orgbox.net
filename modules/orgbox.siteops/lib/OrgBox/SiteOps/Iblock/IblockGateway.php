@@ -51,6 +51,30 @@ interface IblockGateway
     /** @param array<string,mixed> $fields */
     public function updateSection(int $id, array $fields): void;
 
+    /** @return list<array{id:int,code:string,name:string,base:bool}> типы цен модуля catalog */
+    public function listPriceTypes(): array;
+
+    /**
+     * Данные товара или торгового предложения из модуля catalog (цены, остаток, склады); null, если элемент не товар каталога.
+     *
+     * @return array{
+     *   quantity:float,reserved:float,available:bool,type:int,
+     *   prices:list<array{type_id:int,price:float,currency:string,quantity_from:?float,quantity_to:?float}>,
+     *   stores:array<int,array{title:string,amount:float}>,
+     *   offers:list<array{id:int,name:string}>
+     * }|null
+     */
+    public function getProduct(int $id): ?array;
+
+    /**
+     * Записать цены (тип цены => цена и валюта), общий остаток и остатки по складам (склад => количество).
+     * Цена записывается в строку без ограничений по количеству; создаётся, если её ещё нет.
+     *
+     * @param array<int,array{price:float,currency:?string}> $prices
+     * @param array<int,float> $stores
+     */
+    public function updateProduct(int $id, array $prices, ?float $quantity, array $stores): void;
+
     /** Сброс кеша: инфоблока (по тегу) или всего кеша сайта, если $iblockId = null. */
     public function clearCache(?int $iblockId): void;
 }

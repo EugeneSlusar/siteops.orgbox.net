@@ -67,7 +67,7 @@ final class CurlImageDownloader implements ImageDownloader
             CURLOPT_RESOLVE => [$host . ':443:' . $ip],
             CURLOPT_CONNECTTIMEOUT => 10,
             CURLOPT_TIMEOUT => 30,
-            CURLOPT_HTTPHEADER => ['User-Agent: orgbox-siteops', 'Accept: image/*'],
+            CURLOPT_HTTPHEADER => ['User-Agent: orgbox-siteops', 'Accept: image/*, application/pdf'],
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_NOPROGRESS => false,
