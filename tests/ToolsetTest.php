@@ -127,6 +127,25 @@ test('запись: изменение поля, журнал и результ�
     assertSame(10, $audit->entries[0][1]['id']);
 });
 
+test('запись: даты ACTIVE_FROM и ACTIVE_TO — формат, проверка и очистка', function () use ($rw): void {
+    [$server, $gateway] = toolsetServer($rw);
+    $r = callTool($server, 'element_update', ['id' => 10, 'fields' => ['ACTIVE_FROM' => '2026-11-12']]);
+    assertSame(false, $r['isError']);
+    assertSame(true, $r['data']['verified']);
+    assertSame('2026-11-12 00:00:00', $gateway->elements[10]['active_from']);
+
+    $r = callTool($server, 'element_update', ['id' => 10, 'fields' => ['ACTIVE_FROM' => '2026-11-12 15:30', 'ACTIVE_TO' => '2027-01-01']]);
+    assertSame('2026-11-12 15:30:00', $gateway->elements[10]['active_from']);
+    assertSame('2027-01-01 00:00:00', $gateway->elements[10]['active_to']);
+
+    $r = callTool($server, 'element_update', ['id' => 10, 'fields' => ['ACTIVE_FROM' => '']]);
+    assertSame('', $gateway->elements[10]['active_from']);
+
+    foreach (['12.11.2026', '2026-13-40', '2026-02-30', 'вчера', 20261112] as $bad) {
+        assertSame(true, callTool($server, 'element_update', ['id' => 10, 'fields' => ['ACTIVE_FROM' => $bad]])['isError']);
+    }
+});
+
 test('запись: dry_run ничего не меняет и не пишет в журнал', function () use ($rw): void {
     [$server, $gateway, $audit] = toolsetServer($rw);
     $r = callTool($server, 'element_update', ['id' => 10, 'fields' => ['NAME' => 'Новое'], 'dry_run' => true]);

@@ -28,6 +28,7 @@ final class IblockToolset
         'PREVIEW_TEXT_TYPE' => 'texttype', 'DETAIL_TEXT_TYPE' => 'texttype',
         'IBLOCK_SECTION_ID' => 'id0',
         'PREVIEW_PICTURE' => 'image', 'DETAIL_PICTURE' => 'image',
+        'ACTIVE_FROM' => 'datetime', 'ACTIVE_TO' => 'datetime',
     ];
 
     private const SECTION_FIELDS = [
@@ -38,7 +39,7 @@ final class IblockToolset
     private const MAX_TEXT = 200000;
 
     private const FIELDS_HELP = 'Допустимые поля: NAME, CODE, ACTIVE, SORT, PREVIEW_TEXT, DETAIL_TEXT, PREVIEW_TEXT_TYPE, DETAIL_TEXT_TYPE, IBLOCK_SECTION_ID, '
-        . 'PREVIEW_PICTURE, DETAIL_PICTURE. Картинка — объект {"url": "https://…"} или {"base64": "…", "name": "photo.jpg"} '
+        . 'PREVIEW_PICTURE, DETAIL_PICTURE, ACTIVE_FROM, ACTIVE_TO. Даты ACTIVE_FROM и ACTIVE_TO (начало и конец активности, на сайте это, например, дата отзыва или новости) — строка «ГГГГ-ММ-ДД» или «ГГГГ-ММ-ДД ЧЧ:ММ[:СС]», пустая строка очищает. Картинка — объект {"url": "https://…"} или {"base64": "…", "name": "photo.jpg"} '
         . '(JPEG, PNG, WebP, GIF, до 10 МБ); прежний файл заменяется. Удалить картинку нельзя.';
 
     private const PROPERTIES_HELP = 'Свойства: код => значение. Строка/число — одно значение; список [..] — множественное свойство, '
@@ -626,10 +627,29 @@ final class IblockToolset
                 'texttype' => in_array($value, ['text', 'html'], true) ? $value : throw new ToolException('Поле ' . $name . ' должно быть text или html.'),
                 'id0' => is_int($value) && $value >= 0 ? $value : throw new ToolException('Поле ' . $name . ' должно быть целым числом, 0 — без раздела.'),
                 'image' => $this->imageValue($name, $value),
+                'datetime' => $this->datetimeValue($name, $value),
             };
         }
 
         return $result;
+    }
+
+    /** Дата в виде «ГГГГ-ММ-ДД ЧЧ:ММ:СС» (время по умолчанию 00:00:00); пустая строка или null — очистить. */
+    private function datetimeValue(string $name, mixed $value): string
+    {
+        if ($value === null || $value === '') {
+            return '';
+        }
+        if (!is_string($value) || !preg_match('/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/', trim($value), $m)) {
+            throw new ToolException('Поле ' . $name . ' должно быть датой «ГГГГ-ММ-ДД» или «ГГГГ-ММ-ДД ЧЧ:ММ:СС» (пустая строка очищает).');
+        }
+        [$y, $mo, $d] = [(int) $m[1], (int) $m[2], (int) $m[3]];
+        [$h, $mi, $se] = [(int) ($m[4] ?? 0), (int) ($m[5] ?? 0), (int) ($m[6] ?? 0)];
+        if (!checkdate($mo, $d, $y) || $h > 23 || $mi > 59 || $se > 59) {
+            throw new ToolException('Поле ' . $name . ': такой даты не существует.');
+        }
+
+        return sprintf('%04d-%02d-%02d %02d:%02d:%02d', $y, $mo, $d, $h, $mi, $se);
     }
 
     private function imageValue(string $name, mixed $value): FileUpload

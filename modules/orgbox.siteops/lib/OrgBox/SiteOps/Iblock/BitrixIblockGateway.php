@@ -166,7 +166,7 @@ final class BitrixIblockGateway implements IblockGateway
             ['ID' => $id, 'CHECK_PERMISSIONS' => 'N'],
             false,
             false,
-            ['ID', 'IBLOCK_ID', 'NAME', 'CODE', 'ACTIVE', 'SORT', 'IBLOCK_SECTION_ID', 'PREVIEW_PICTURE', 'DETAIL_PICTURE', 'PREVIEW_TEXT', 'PREVIEW_TEXT_TYPE', 'DETAIL_TEXT', 'DETAIL_TEXT_TYPE', 'TIMESTAMP_X', 'DETAIL_PAGE_URL'],
+            ['ID', 'IBLOCK_ID', 'NAME', 'CODE', 'ACTIVE', 'SORT', 'IBLOCK_SECTION_ID', 'PREVIEW_PICTURE', 'DETAIL_PICTURE', 'PREVIEW_TEXT', 'PREVIEW_TEXT_TYPE', 'DETAIL_TEXT', 'DETAIL_TEXT_TYPE', 'DATE_ACTIVE_FROM', 'DATE_ACTIVE_TO', 'TIMESTAMP_X', 'DETAIL_PAGE_URL'],
         )->GetNext(true, true);
         if (!$row) {
             return null;
@@ -210,6 +210,8 @@ final class BitrixIblockGateway implements IblockGateway
             'preview_text_type' => RawRow::string($row, 'PREVIEW_TEXT_TYPE'),
             'detail_text' => RawRow::string($row, 'DETAIL_TEXT'),
             'detail_text_type' => RawRow::string($row, 'DETAIL_TEXT_TYPE'),
+            'active_from' => $this->isoDate(RawRow::string($row, 'DATE_ACTIVE_FROM')),
+            'active_to' => $this->isoDate(RawRow::string($row, 'DATE_ACTIVE_TO')),
             'modified' => RawRow::string($row, 'TIMESTAMP_X'),
             'url' => (string) $row['DETAIL_PAGE_URL'],
             'properties' => $properties,
@@ -530,6 +532,17 @@ final class BitrixIblockGateway implements IblockGateway
         ];
     }
 
+    /** Дата из формата сайта в «ГГГГ-ММ-ДД ЧЧ:ММ:СС»; пустая или нечитаемая — пустая строка. */
+    private function isoDate(string $value): string
+    {
+        if ($value === '') {
+            return '';
+        }
+        $timestamp = \MakeTimeStamp($value);
+
+        return $timestamp ? date('Y-m-d H:i:s', $timestamp) : '';
+    }
+
     /**
      * @param array<string,mixed> $fields
      * @return array<string,mixed>
@@ -543,6 +556,13 @@ final class BitrixIblockGateway implements IblockGateway
         }
         if (array_key_exists('ACTIVE', $fields)) {
             $fields['ACTIVE'] = $fields['ACTIVE'] ? 'Y' : 'N';
+        }
+        foreach (['ACTIVE_FROM' => 'DATE_ACTIVE_FROM', 'ACTIVE_TO' => 'DATE_ACTIVE_TO'] as $name => $bitrixName) {
+            if (array_key_exists($name, $fields)) {
+                $value = (string) $fields[$name];
+                unset($fields[$name]);
+                $fields[$bitrixName] = $value === '' ? '' : \ConvertTimeStamp((new \DateTimeImmutable($value))->getTimestamp(), 'FULL');
+            }
         }
         if (array_key_exists('IBLOCK_SECTION_ID', $fields) && $fields['IBLOCK_SECTION_ID'] === 0) {
             $fields['IBLOCK_SECTION_ID'] = false;
