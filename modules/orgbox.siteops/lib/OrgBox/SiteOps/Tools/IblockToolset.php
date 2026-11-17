@@ -6,6 +6,8 @@ namespace OrgBox\SiteOps\Tools;
 
 use OrgBox\SiteOps\Audit\AuditLogger;
 use OrgBox\SiteOps\Config\Settings;
+use OrgBox\SiteOps\Files\FileUpload;
+use OrgBox\SiteOps\Files\ImageLoader;
 use OrgBox\SiteOps\Iblock\IblockGateway;
 use OrgBox\SiteOps\Mcp\Tool;
 use OrgBox\SiteOps\Mcp\ToolException;
@@ -24,6 +26,7 @@ final class IblockToolset
         'PREVIEW_TEXT' => 'text', 'DETAIL_TEXT' => 'text',
         'PREVIEW_TEXT_TYPE' => 'texttype', 'DETAIL_TEXT_TYPE' => 'texttype',
         'IBLOCK_SECTION_ID' => 'id0',
+        'PREVIEW_PICTURE' => 'image', 'DETAIL_PICTURE' => 'image',
     ];
 
     private const SECTION_FIELDS = [
@@ -33,10 +36,15 @@ final class IblockToolset
 
     private const MAX_TEXT = 200000;
 
+    private const FIELDS_HELP = 'Допустимые поля: NAME, CODE, ACTIVE, SORT, PREVIEW_TEXT, DETAIL_TEXT, PREVIEW_TEXT_TYPE, DETAIL_TEXT_TYPE, IBLOCK_SECTION_ID, '
+        . 'PREVIEW_PICTURE, DETAIL_PICTURE. Картинка — объект {"url": "https://…"} или {"base64": "…", "name": "photo.jpg"} '
+        . '(JPEG, PNG, WebP, GIF, до 10 МБ); прежний файл заменяется. Удалить картинку нельзя.';
+
     public function __construct(
         private IblockGateway $gateway,
         private Settings $settings,
         private AuditLogger $audit,
+        private ?ImageLoader $images = null,
     ) {
     }
 
@@ -83,7 +91,7 @@ final class IblockToolset
             'type' => 'object',
             'properties' => [
                 'id' => $int,
-                'fields' => ['type' => 'object', 'description' => 'Допустимые поля: ' . implode(', ', array_keys(self::ELEMENT_FIELDS))],
+                'fields' => ['type' => 'object', 'description' => self::FIELDS_HELP],
                 'properties' => ['type' => 'object', 'description' => 'Свойства: код => значение. Файловые свойства не поддерживаются.'],
                 'dry_run' => $dryRun,
             ],
@@ -94,7 +102,7 @@ final class IblockToolset
             'type' => 'object',
             'properties' => [
                 'iblock_id' => $int,
-                'fields' => ['type' => 'object', 'description' => 'NAME обязателен. Допустимые поля: ' . implode(', ', array_keys(self::ELEMENT_FIELDS))],
+                'fields' => ['type' => 'object', 'description' => 'NAME обязателен. ' . self::FIELDS_HELP],
                 'properties' => ['type' => 'object'],
                 'dry_run' => $dryRun,
             ],
@@ -219,7 +227,7 @@ final class IblockToolset
         [$properties, $shownProperties] = $this->normalizeProperties($iblockId, $this->objectArg($args, 'properties'));
 
         if (!empty($args['dry_run'])) {
-            return ['dry_run' => true, 'iblock_id' => $iblockId, 'would_create' => ['fields' => $fields, 'properties' => $shownProperties]];
+            return ['dry_run' => true, 'iblock_id' => $iblockId, 'would_create' => ['fields' => $this->shorten($fields), 'properties' => $shownProperties]];
         }
 
         $id = $this->gateway->createElement($iblockId, $fields, $properties);
@@ -335,10 +343,20 @@ final class IblockToolset
                 'text' => $this->stringValue($name, $value, self::MAX_TEXT, false),
                 'texttype' => in_array($value, ['text', 'html'], true) ? $value : throw new ToolException('Поле ' . $name . ' должно быть text или html.'),
                 'id0' => is_int($value) && $value >= 0 ? $value : throw new ToolException('Поле ' . $name . ' должно быть целым числом, 0 — без раздела.'),
+                'image' => $this->imageValue($name, $value),
             };
         }
 
         return $result;
+    }
+
+    private function imageValue(string $name, mixed $value): FileUpload
+    {
+        if (!is_array($value) || ($value !== [] && array_is_list($value))) {
+            throw new ToolException('Поле ' . $name . ' должно быть объектом {"url": "https://…"} или {"base64": "…"}.');
+        }
+
+        return ($this->images ?? new ImageLoader())->load($name, $value);
     }
 
     private function stringValue(string $name, mixed $value, int $max, bool $notEmpty): string
@@ -446,7 +464,10 @@ final class IblockToolset
         foreach ($fields as $name => $value) {
             $key = $map[$name] ?? strtolower($name);
             $old = $before[$key] ?? null;
-            if ($old !== $value) {
+            if ($value instanceof FileUpload) {
+                // Файл всегда считается изменением: содержимое прежнего не сравнить, показываем только описание.
+                $changes[$name] = ['before' => $old, 'after' => $value->describe()];
+            } elseif ($old !== $value) {
                 $changes[$name] = ['before' => $old, 'after' => $value];
             }
         }
@@ -462,6 +483,9 @@ final class IblockToolset
 
     private function shorten(mixed $value): mixed
     {
+        if ($value instanceof FileUpload) {
+            return $value->describe();
+        }
         if (is_array($value)) {
             return array_map(fn ($item) => $this->shorten($item), $value);
         }

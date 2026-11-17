@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OrgBox\SiteOps\Iblock;
 
 use Bitrix\Main\Loader;
+use OrgBox\SiteOps\Files\FileUpload;
 use RuntimeException;
 
 /**
@@ -164,7 +165,7 @@ final class BitrixIblockGateway implements IblockGateway
             ['ID' => $id, 'CHECK_PERMISSIONS' => 'N'],
             false,
             false,
-            ['ID', 'IBLOCK_ID', 'NAME', 'CODE', 'ACTIVE', 'SORT', 'IBLOCK_SECTION_ID', 'PREVIEW_TEXT', 'PREVIEW_TEXT_TYPE', 'DETAIL_TEXT', 'DETAIL_TEXT_TYPE', 'TIMESTAMP_X', 'DETAIL_PAGE_URL'],
+            ['ID', 'IBLOCK_ID', 'NAME', 'CODE', 'ACTIVE', 'SORT', 'IBLOCK_SECTION_ID', 'PREVIEW_PICTURE', 'DETAIL_PICTURE', 'PREVIEW_TEXT', 'PREVIEW_TEXT_TYPE', 'DETAIL_TEXT', 'DETAIL_TEXT_TYPE', 'TIMESTAMP_X', 'DETAIL_PAGE_URL'],
         )->GetNext(true, true);
         if (!$row) {
             return null;
@@ -194,6 +195,8 @@ final class BitrixIblockGateway implements IblockGateway
             'active' => RawRow::string($row, 'ACTIVE') === 'Y',
             'sort' => (int) $row['SORT'],
             'section_id' => (int) $row['IBLOCK_SECTION_ID'],
+            'preview_picture' => $this->pictureInfo($row['~PREVIEW_PICTURE'] ?? $row['PREVIEW_PICTURE'] ?? null),
+            'detail_picture' => $this->pictureInfo($row['~DETAIL_PICTURE'] ?? $row['DETAIL_PICTURE'] ?? null),
             'preview_text' => RawRow::string($row, 'PREVIEW_TEXT'),
             'preview_text_type' => RawRow::string($row, 'PREVIEW_TEXT_TYPE'),
             'detail_text' => RawRow::string($row, 'DETAIL_TEXT'),
@@ -207,8 +210,13 @@ final class BitrixIblockGateway implements IblockGateway
     public function updateElement(int $id, array $fields, array $properties): void
     {
         $element = new \CIBlockElement();
-        if ($fields !== [] && !$element->Update($id, $this->toBitrixFields($fields))) {
-            throw new RuntimeException('Не удалось сохранить элемент: ' . $element->LAST_ERROR);
+        $temp = [];
+        try {
+            if ($fields !== [] && !$element->Update($id, $this->toBitrixFields($fields, $temp))) {
+                throw new RuntimeException('Не удалось сохранить элемент: ' . $element->LAST_ERROR);
+            }
+        } finally {
+            $this->cleanup($temp);
         }
         if ($properties !== []) {
             $current = $this->getElement($id);
@@ -222,7 +230,12 @@ final class BitrixIblockGateway implements IblockGateway
     public function createElement(int $iblockId, array $fields, array $properties): int
     {
         $element = new \CIBlockElement();
-        $id = (int) $element->Add(['IBLOCK_ID' => $iblockId] + $this->toBitrixFields($fields));
+        $temp = [];
+        try {
+            $id = (int) $element->Add(['IBLOCK_ID' => $iblockId] + $this->toBitrixFields($fields, $temp));
+        } finally {
+            $this->cleanup($temp);
+        }
         if ($id <= 0) {
             throw new RuntimeException('Не удалось создать элемент: ' . $element->LAST_ERROR);
         }
@@ -242,11 +255,74 @@ final class BitrixIblockGateway implements IblockGateway
     }
 
     /**
+     * Временный файл → массив для CIBlockElement (старый файл Битрикс удаляет сам при замене).
+     *
+     * @param list<string> $temp
+     * @return array<string,mixed>
+     */
+    private function fileArray(FileUpload $upload, array &$temp): array
+    {
+        $dir = sys_get_temp_dir() . '/orgbox-siteops-' . bin2hex(random_bytes(6));
+        if (!mkdir($dir, 0700) && !is_dir($dir)) {
+            throw new RuntimeException('Не удалось создать временную папку для файла.');
+        }
+        $temp[] = $dir;
+        $path = $dir . '/' . $upload->name;
+        if (file_put_contents($path, $upload->bytes) === false) {
+            throw new RuntimeException('Не удалось записать временный файл.');
+        }
+        $file = \CFile::MakeFileArray($path);
+        if (!is_array($file)) {
+            throw new RuntimeException('Битрикс не принял файл ' . $upload->name . '.');
+        }
+        $file['name'] = $upload->name;
+        $file['type'] = $upload->mime;
+        $file['MODULE_ID'] = 'iblock';
+
+        return $file;
+    }
+
+    /** @param list<string> $dirs */
+    private function cleanup(array $dirs): void
+    {
+        foreach ($dirs as $dir) {
+            foreach (glob($dir . '/*') ?: [] as $file) {
+                @unlink($file);
+            }
+            @rmdir($dir);
+        }
+    }
+
+    /** @return array{id:int,src:string,name:string,width:int,height:int,size:int}|null */
+    private function pictureInfo(mixed $fileId): ?array
+    {
+        $fileId = (int) $fileId;
+        $file = $fileId > 0 ? \CFile::GetFileArray($fileId) : null;
+        if (!is_array($file)) {
+            return null;
+        }
+
+        return [
+            'id' => $fileId,
+            'src' => (string) $file['SRC'],
+            'name' => (string) $file['ORIGINAL_NAME'],
+            'width' => (int) $file['WIDTH'],
+            'height' => (int) $file['HEIGHT'],
+            'size' => (int) $file['FILE_SIZE'],
+        ];
+    }
+
+    /**
      * @param array<string,mixed> $fields
      * @return array<string,mixed>
      */
-    private function toBitrixFields(array $fields): array
+    private function toBitrixFields(array $fields, array &$temp = []): array
     {
+        foreach (['PREVIEW_PICTURE', 'DETAIL_PICTURE'] as $name) {
+            if (($fields[$name] ?? null) instanceof FileUpload) {
+                $fields[$name] = $this->fileArray($fields[$name], $temp);
+            }
+        }
         if (array_key_exists('ACTIVE', $fields)) {
             $fields['ACTIVE'] = $fields['ACTIVE'] ? 'Y' : 'N';
         }

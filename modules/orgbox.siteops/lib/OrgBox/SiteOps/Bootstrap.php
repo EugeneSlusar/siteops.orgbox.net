@@ -14,6 +14,8 @@ use OrgBox\SiteOps\Http\BitrixCounterStore;
 use OrgBox\SiteOps\Http\McpEndpoint;
 use OrgBox\SiteOps\Http\OAuthEndpoint;
 use OrgBox\SiteOps\Http\RequestGuard;
+use OrgBox\SiteOps\Files\CurlImageDownloader;
+use OrgBox\SiteOps\Files\ImageLoader;
 use OrgBox\SiteOps\Iblock\BitrixIblockGateway;
 use OrgBox\SiteOps\Mcp\McpServer;
 use OrgBox\SiteOps\Mcp\ToolRegistry;
@@ -165,7 +167,7 @@ final class Bootstrap
     public function tools(Settings $settings): ToolRegistry
     {
         $registry = new ToolRegistry();
-        (new IblockToolset(new BitrixIblockGateway(), $settings, new BitrixAuditLogger()))->registerAll($registry);
+        (new IblockToolset(new BitrixIblockGateway(), $settings, new BitrixAuditLogger(), new ImageLoader(new CurlImageDownloader())))->registerAll($registry);
 
         return $registry;
     }

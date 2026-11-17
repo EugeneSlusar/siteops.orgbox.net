@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Support;
 
+use OrgBox\SiteOps\Files\FileUpload;
 use OrgBox\SiteOps\Iblock\IblockGateway;
 
 /** Данные в памяти. Реализует тот же контракт, что и BitrixIblockGateway. */
@@ -88,7 +89,7 @@ final class FakeGateway implements IblockGateway
     {
         $this->calls[] = 'updateElement:' . $id;
         foreach ($fields as $name => $value) {
-            $this->elements[$id][$name === 'IBLOCK_SECTION_ID' ? 'section_id' : strtolower($name)] = $value;
+            $this->elements[$id][$name === 'IBLOCK_SECTION_ID' ? 'section_id' : strtolower($name)] = $value instanceof FileUpload ? $value->describe() : $value;
         }
         foreach ($properties as $code => $value) {
             $enum = $this->getProperties($this->elements[$id]['iblock_id'])[0]['enum'];
@@ -100,7 +101,8 @@ final class FakeGateway implements IblockGateway
     {
         $this->calls[] = 'createElement';
         $id = $this->nextId++;
-        $this->elements[$id] = ['id' => $id, 'iblock_id' => $iblockId, 'name' => $fields['NAME'], 'active' => $fields['ACTIVE'], 'properties' => $properties] + $this->elements[10];
+        $this->elements[$id] = ['id' => $id, 'iblock_id' => $iblockId, 'name' => $fields['NAME'], 'active' => $fields['ACTIVE'], 'properties' => $properties]
+            + array_map(static fn ($v) => $v instanceof FileUpload ? $v->describe() : $v, array_change_key_case($fields)) + $this->elements[10];
 
         return $id;
     }
