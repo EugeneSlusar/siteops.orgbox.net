@@ -38,6 +38,12 @@
 
 Подробнее: [docs/SECURITY.md](docs/SECURITY.md).
 
+## Выпуск обновлений
+
+Сайты обновляются кнопкой в настройках модуля из **GitHub Releases**. После изменения кода поднимите версию в `modules/orgbox.siteops/install/version.php`,
+допишите `CHANGELOG.md`, слейте в `main` и **выпустите релиз** (`git tag vX.Y.Z && git push origin vX.Y.Z` или Actions → release → Run workflow).
+Без релиза сайты нового кода не получат. Подробности: [docs/UPDATES.md](docs/UPDATES.md).
+
 ## Установка и подключение
 
 Рекомендуемый способ, особенно для нескольких сайтов на одном Битриксе и для хостингов, где `local/` и `bitrix/` — симлинки:
