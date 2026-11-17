@@ -14,6 +14,64 @@ final class MemoryOAuthStore implements OAuthStore
     public array $codes = [];
     /** @var array<string,array<string,mixed>> */
     public array $tokens = [];
+    /** @var array<string,array<string,mixed>> */
+    public array $devices = [];
+
+    public function saveDevice(array $device): void
+    {
+        $this->devices[$device['device_hash']] = $device;
+    }
+
+    public function getDevice(string $deviceHash): ?array
+    {
+        return $this->devices[$deviceHash] ?? null;
+    }
+
+    public function getDeviceByUserCode(string $userHash): ?array
+    {
+        foreach ($this->devices as $device) {
+            if ($device['user_hash'] === $userHash) {
+                return $device;
+            }
+        }
+
+        return null;
+    }
+
+    public function decideDevice(string $userHash, string $status, int $userId): bool
+    {
+        foreach ($this->devices as $hash => $device) {
+            if ($device['user_hash'] === $userHash && $device['status'] === 'pending') {
+                $this->devices[$hash]['status'] = $status;
+                $this->devices[$hash]['user_id'] = $userId;
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public function touchDevice(string $deviceHash, int $lastPoll, int $interval): void
+    {
+        if (isset($this->devices[$deviceHash])) {
+            $this->devices[$deviceHash]['last_poll'] = $lastPoll;
+            $this->devices[$deviceHash]['interval'] = $interval;
+        }
+    }
+
+    public function consumeDevice(string $deviceHash): ?array
+    {
+        $device = $this->devices[$deviceHash] ?? null;
+        unset($this->devices[$deviceHash]);
+
+        return $device;
+    }
+
+    public function countDevices(int $now): int
+    {
+        return count(array_filter($this->devices, static fn ($d) => $d['expires'] >= $now));
+    }
 
     public function saveClient(array $client): void
     {
@@ -97,6 +155,11 @@ final class MemoryOAuthStore implements OAuthStore
         foreach ($this->codes as $hash => $code) {
             if ($code['expires'] < $now) {
                 unset($this->codes[$hash]);
+            }
+        }
+        foreach ($this->devices as $hash => $device) {
+            if ($device['expires'] < $now) {
+                unset($this->devices[$hash]);
             }
         }
         foreach ($this->tokens as $hash => $token) {

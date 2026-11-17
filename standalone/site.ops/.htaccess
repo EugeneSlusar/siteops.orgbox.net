@@ -25,6 +25,6 @@ DirectorySlash Off
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 
     RewriteRule ^(mcp|admin)/?$ $1/index.php [L]
-    RewriteRule ^oauth/(authorize|token|register|revoke)/?$ oauth/$1/index.php [L]
+    RewriteRule ^oauth/(authorize|verify|token|register|device|revoke)/?$ oauth/$1/index.php [L]
     RewriteRule ^oauth/\.well-known/(oauth-authorization-server|openid-configuration|oauth-protected-resource)/?$ oauth/.well-known/$1/index.php [L]
 </IfModule>

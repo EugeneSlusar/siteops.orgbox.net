@@ -15,7 +15,7 @@ use OrgBox\SiteOps\OAuth\OAuthServer;
  */
 final class OAuthEndpoint
 {
-    public const ROUTES = ['as-metadata', 'resource-metadata', 'register', 'token', 'revoke'];
+    public const ROUTES = ['as-metadata', 'resource-metadata', 'register', 'device', 'token', 'revoke'];
 
     public function __construct(
         private Settings $settings,
@@ -56,6 +56,7 @@ final class OAuthEndpoint
                 'as-metadata' => HttpResponse::json(200, $this->oauth->authorizationServerMetadata(), ['Cache-Control' => 'public, max-age=300'] + $headers),
                 'resource-metadata' => HttpResponse::json(200, $this->oauth->protectedResourceMetadata(), ['Cache-Control' => 'public, max-age=300'] + $headers),
                 'register' => $this->register($server, $rawBody, $headers),
+                'device' => HttpResponse::json(200, $this->oauth->startDevice($this->form($rawBody), (string) ($server['REMOTE_ADDR'] ?? '')), $headers),
                 'token' => HttpResponse::json(200, $this->oauth->token($this->form($rawBody)), $headers),
                 'revoke' => $this->revoke($rawBody, $headers),
             };

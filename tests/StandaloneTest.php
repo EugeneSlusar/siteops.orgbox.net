@@ -339,7 +339,7 @@ test('site.ops: .htaccess — по умолчанию всё закрыто, о�
     }
     assertContains('DirectorySlash Off', $main, 'без этого Apache редиректит /site.ops/mcp на /site.ops/mcp/ и POST теряет тело');
     assertContains('^(mcp|admin)/?$ $1/index.php', $main);
-    assertContains('oauth/(authorize|token|register|revoke)/?$', $main);
+    assertContains('oauth/(authorize|verify|token|register|device|revoke)/?$', $main);
     assertContains('oauth-authorization-server|openid-configuration|oauth-protected-resource', $main, 'документы обнаружения без слэша');
     assertContains('HTTP_AUTHORIZATION', $main, 'заголовок Authorization передаётся в PHP');
 });

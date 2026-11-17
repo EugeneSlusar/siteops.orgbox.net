@@ -1,5 +1,16 @@
 # История изменений
 
+## 0.6.0 — 2026-11-22
+
+- **Новое: подключение по коду (OAuth Device Authorization Grant, RFC 8628)**, как `gh auth login`. Адреса: `POST /site.ops/oauth/device` (старт),
+  `/site.ops/oauth/token` с `grant_type=urn:ietf:params:oauth:grant-type:device_code` (опрос), страница подтверждения `/site.ops/oauth/verify/` (вход администратором,
+  сверка кода, «Разрешить» / «Отклонить»). Стандартные ответы опроса: `authorization_pending`, `slow_down`, `expired_token`, `access_denied`.
+  Выдаются те же токены (доступ 1 час, обновление 30 суток), права определяются настройками сайта. Код устройства и код для человека хранятся только как SHA-256.
+- Клиент `tools/device_login.py` (`login`, `token`), токены в файле с правами 600.
+- Регистрация клиентов принимает `grant_types` с device_code без `redirect_uris`. Документ сервера объявляет `device_authorization_endpoint`.
+- Новая таблица `orgbox_siteops_oauth_device` создаётся сама при первом обращении. Обновление `.htaccess` обязательно (новые адреса `device`, `verify`): кнопка обновления его заменяет.
+- 203 автотеста.
+
 ## 0.5.4 — 2026-11-21
 
 - **Исправлено: кнопки «Проверить обновления» и «Установить» на странице настроек не работали** (ошибка «Argument #4 ($profile) must be of type PackageProfile»):

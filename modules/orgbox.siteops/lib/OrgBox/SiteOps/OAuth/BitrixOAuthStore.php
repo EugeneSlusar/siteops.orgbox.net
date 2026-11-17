@@ -16,6 +16,7 @@ final class BitrixOAuthStore implements OAuthStore
     private const T_CLIENT = 'orgbox_siteops_oauth_client';
     private const T_CODE = 'orgbox_siteops_oauth_code';
     private const T_TOKEN = 'orgbox_siteops_oauth_token';
+    private const T_DEVICE = 'orgbox_siteops_oauth_device';
 
     private static bool $schemaReady = false;
 
@@ -81,6 +82,74 @@ final class BitrixOAuthStore implements OAuthStore
             'challenge' => (string) $row['challenge'], 'user_id' => (int) $row['user_id'], 'resource' => (string) $row['resource'], 'expires' => (int) $row['expires']];
     }
 
+    public function saveDevice(array $device): void
+    {
+        $this->db->queryExecute(sprintf(
+            'INSERT INTO %s (site, device_hash, user_hash, client_id, status, user_id, expires, poll_interval, last_poll, ip, created) VALUES (%s, %s, %s, %s, %s, %d, %d, %d, %d, %s, %d)',
+            self::T_DEVICE, $this->q($this->siteId), $this->q($device['device_hash']), $this->q($device['user_hash']), $this->q($device['client_id']),
+            $this->q($device['status']), (int) $device['user_id'], (int) $device['expires'], (int) $device['interval'], (int) $device['last_poll'],
+            $this->q((string) $device['ip']), (int) $device['created'],
+        ));
+    }
+
+    public function getDevice(string $deviceHash): ?array
+    {
+        return $this->deviceRow(sprintf('site = %s AND device_hash = %s', $this->q($this->siteId), $this->q($deviceHash)));
+    }
+
+    public function getDeviceByUserCode(string $userHash): ?array
+    {
+        return $this->deviceRow(sprintf('site = %s AND user_hash = %s', $this->q($this->siteId), $this->q($userHash)));
+    }
+
+    public function decideDevice(string $userHash, string $status, int $userId): bool
+    {
+        $this->db->queryExecute(sprintf(
+            "UPDATE %s SET status = %s, user_id = %d WHERE site = %s AND user_hash = %s AND status = 'pending'",
+            self::T_DEVICE, $this->q($status), $userId, $this->q($this->siteId), $this->q($userHash),
+        ));
+
+        return $this->db->getAffectedRowsCount() === 1;
+    }
+
+    public function touchDevice(string $deviceHash, int $lastPoll, int $interval): void
+    {
+        $this->db->queryExecute(sprintf(
+            'UPDATE %s SET last_poll = %d, poll_interval = %d WHERE site = %s AND device_hash = %s',
+            self::T_DEVICE, $lastPoll, $interval, $this->q($this->siteId), $this->q($deviceHash),
+        ));
+    }
+
+    public function consumeDevice(string $deviceHash): ?array
+    {
+        $device = $this->getDevice($deviceHash);
+        if ($device === null) {
+            return null;
+        }
+        $this->db->queryExecute(sprintf('DELETE FROM %s WHERE site = %s AND device_hash = %s', self::T_DEVICE, $this->q($this->siteId), $this->q($deviceHash)));
+
+        return $this->db->getAffectedRowsCount() === 1 ? $device : null;
+    }
+
+    public function countDevices(int $now): int
+    {
+        $row = $this->db->query(sprintf('SELECT COUNT(*) AS c FROM %s WHERE site = %s AND expires >= %d', self::T_DEVICE, $this->q($this->siteId), $now))->fetch();
+
+        return (int) ($row['c'] ?? 0);
+    }
+
+    /** @return array<string,mixed>|null */
+    private function deviceRow(string $where): ?array
+    {
+        $row = $this->db->query('SELECT device_hash, user_hash, client_id, status, user_id, expires, poll_interval, last_poll, ip, created FROM ' . self::T_DEVICE . ' WHERE ' . $where)->fetch();
+
+        return $row ? [
+            'device_hash' => (string) $row['device_hash'], 'user_hash' => (string) $row['user_hash'], 'client_id' => (string) $row['client_id'],
+            'status' => (string) $row['status'], 'user_id' => (int) $row['user_id'], 'expires' => (int) $row['expires'],
+            'interval' => (int) $row['poll_interval'], 'last_poll' => (int) $row['last_poll'], 'ip' => (string) $row['ip'], 'created' => (int) $row['created'],
+        ] : null;
+    }
+
     public function saveToken(array $token): void
     {
         $this->db->queryExecute(sprintf(
@@ -120,6 +189,7 @@ final class BitrixOAuthStore implements OAuthStore
         $client = $this->q($clientId);
         $this->db->queryExecute(sprintf('UPDATE %s SET revoked = 1 WHERE site = %s AND client_id = %s', self::T_TOKEN, $site, $client));
         $this->db->queryExecute(sprintf('DELETE FROM %s WHERE site = %s AND client_id = %s', self::T_CODE, $site, $client));
+        $this->db->queryExecute(sprintf('DELETE FROM %s WHERE site = %s AND client_id = %s', self::T_DEVICE, $site, $client));
         $this->db->queryExecute(sprintf('DELETE FROM %s WHERE site = %s AND client_id = %s', self::T_CLIENT, $site, $client));
     }
 
@@ -148,6 +218,7 @@ final class BitrixOAuthStore implements OAuthStore
         $site = $this->q($this->siteId);
         $this->db->queryExecute(sprintf('DELETE FROM %s WHERE site = %s AND expires < %d', self::T_CODE, $site, $now));
         $this->db->queryExecute(sprintf('DELETE FROM %s WHERE site = %s AND expires < %d', self::T_TOKEN, $site, $now));
+        $this->db->queryExecute(sprintf('DELETE FROM %s WHERE site = %s AND expires < %d', self::T_DEVICE, $site, $now));
         $this->db->queryExecute(sprintf(
             'DELETE FROM %1$s WHERE site = %2$s AND created < %3$d AND client_id NOT IN (SELECT client_id FROM %4$s WHERE site = %2$s)',
             self::T_CLIENT, $site, $now - $unusedClientTtl, self::T_TOKEN,
@@ -180,6 +251,11 @@ final class BitrixOAuthStore implements OAuthStore
             site VARCHAR(8) NOT NULL, code_hash CHAR(64) NOT NULL, client_id VARCHAR(40) NOT NULL, redirect_uri VARCHAR(2000) NOT NULL,
             challenge VARCHAR(128) NOT NULL, user_id INT NOT NULL, resource VARCHAR(500) NOT NULL, expires INT NOT NULL,
             PRIMARY KEY (site, code_hash))');
+        $this->db->queryExecute('CREATE TABLE IF NOT EXISTS ' . self::T_DEVICE . ' (
+            site VARCHAR(8) NOT NULL, device_hash CHAR(64) NOT NULL, user_hash CHAR(64) NOT NULL, client_id VARCHAR(40) NOT NULL,
+            status VARCHAR(10) NOT NULL, user_id INT NOT NULL DEFAULT 0, expires INT NOT NULL, poll_interval INT NOT NULL,
+            last_poll INT NOT NULL DEFAULT 0, ip VARCHAR(64) NOT NULL DEFAULT \'\', created INT NOT NULL,
+            PRIMARY KEY (site, device_hash), KEY ix_user (site, user_hash))');
         $this->db->queryExecute('CREATE TABLE IF NOT EXISTS ' . self::T_TOKEN . ' (
             site VARCHAR(8) NOT NULL, token_hash CHAR(64) NOT NULL, type VARCHAR(10) NOT NULL, client_id VARCHAR(40) NOT NULL,
             user_id INT NOT NULL, family VARCHAR(40) NOT NULL, expires INT NOT NULL, revoked TINYINT NOT NULL DEFAULT 0, created INT NOT NULL,

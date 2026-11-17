@@ -60,7 +60,7 @@
 ```nginx
 location ~ ^/site\.ops/(?!(mcp|admin|oauth)(/|$)) { deny all; }
 location ~ ^/site\.ops/(mcp|admin)$ { rewrite ^(.*)$ $1/index.php last; }
-location ~ ^/site\.ops/oauth/(authorize|token|register|revoke)$ { rewrite ^(.*)$ $1/index.php last; }
+location ~ ^/site\.ops/oauth/(authorize|verify|token|register|device|revoke)$ { rewrite ^(.*)$ $1/index.php last; }
 ```
 
 **Где лежат настройки.** В файле `site.ops/_data/settings.php` внутри папки (у каждого сайта свой). В нём хэш токена (SHA-256, не сам токен) и, если вы их ввели, токен GitHub для обновлений.
@@ -100,8 +100,16 @@ claude mcp add --transport http siteops https://ваш-сайт/site.ops/mcp
 
 Подключения видны на странице настроек («Подключения (OAuth)») и отзываются кнопкой. Токен доступа живёт 1 час и обновляется сам, токен обновления 30 суток.
 
-**Почему не Device Flow.** Device Flow (как в `gh auth login`) нужен устройствам без браузера. Клиенты MCP используют код авторизации с PKCE:
-пользовательский опыт тот же (ссылка → вход → «Разрешить»), но протокол другой.
+**Подключение по коду (Device Flow, RFC 8628)** — как `gh auth login`. Для клиентов без браузера и облачных сессий, где нельзя принять ответ на `localhost`:
+
+1. Клиент делает `POST https://ваш-сайт/site.ops/oauth/device` (поле `client_name` необязательно) и получает `device_code` (секрет), `user_code` вида `ABCD-2345`,
+   ссылку `verification_uri_complete`, `expires_in` (15 минут) и `interval` (5 секунд).
+2. Клиент показывает вам ссылку и код и раз в `interval` секунд делает `POST /site.ops/oauth/token` с `grant_type=urn:ietf:params:oauth:grant-type:device_code`,
+   `device_code` и `client_id` (его вернул первый запрос). Пока вы не подтвердили, ответ `authorization_pending`; при частом опросе `slow_down`.
+3. Вы открываете ссылку, входите администратором Битрикса, сверяете код и нажимаете **Разрешить**. Следующий опрос вернёт токены (те же, что и при обычном подключении).
+
+Готовый клиент: `python3 tools/device_login.py login https://ваш-сайт`, затем `python3 tools/device_login.py token` печатает действующий токен доступа (при необходимости обновляет).
+Файл с токенами создаётся с правами 600.
 
 **Необязательно: корневой `.well-known`.** Если клиент не находит документы OAuth, добавьте в `.htaccess` корня сайта (до правил Битрикса) фрагмент из
 [`standalone/root-well-known.htaccess`](../standalone/root-well-known.htaccess):

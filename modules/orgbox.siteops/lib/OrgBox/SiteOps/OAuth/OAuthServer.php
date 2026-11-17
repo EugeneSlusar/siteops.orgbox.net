@@ -7,6 +7,7 @@ namespace OrgBox\SiteOps\OAuth;
 /**
  * OAuth 2.1 для MCP: код авторизации + PKCE (только S256), динамическая регистрация клиентов (RFC 7591),
  * обновляемые токены с ротацией и обнаружением повторного использования, отзыв (RFC 7009).
+ * Поток устройства (RFC 8628): клиент без браузера получает короткий код, человек подтверждает его на странице сайта.
  * Клиенты публичные (без секрета). Права доступа токена не шире настроек сайта: режим и список
  * инфоблоков проверяются при каждом вызове инструмента, а не записываются в токен.
  */
@@ -16,6 +17,12 @@ final class OAuthServer
     public const ACCESS_TTL = 3600;
     public const REFRESH_TTL = 2592000; // 30 суток
     public const SCOPE = 'siteops';
+    public const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
+    public const DEVICE_TTL = 900;       // 15 минут на подтверждение
+    public const DEVICE_INTERVAL = 5;    // как часто опрашивать, секунд
+    private const DEVICE_MAX_PENDING = 30;
+    /** Без гласных и похожих символов (0/O, 1/I/L): код читают с экрана и вводят вручную. */
+    private const USER_CODE_ALPHABET = 'BCDFGHJKMNPQRSTVWXZ23456789';
     private const MAX_CLIENTS = 200;
     private const MAX_REDIRECTS = 5;
     private const UNUSED_CLIENT_TTL = 604800; // 7 суток
@@ -56,9 +63,10 @@ final class OAuthServer
             'authorization_endpoint' => $this->issuer() . '/authorize/',
             'token_endpoint' => $this->issuer() . '/token/',
             'registration_endpoint' => $this->issuer() . '/register/',
+            'device_authorization_endpoint' => $this->issuer() . '/device/',
             'revocation_endpoint' => $this->issuer() . '/revoke/',
             'response_types_supported' => ['code'],
-            'grant_types_supported' => ['authorization_code', 'refresh_token'],
+            'grant_types_supported' => ['authorization_code', 'refresh_token', self::DEVICE_GRANT],
             'token_endpoint_auth_methods_supported' => ['none'],
             'revocation_endpoint_auth_methods_supported' => ['none'],
             'code_challenge_methods_supported' => ['S256'],
@@ -93,8 +101,14 @@ final class OAuthServer
             throw new OAuthException('temporarily_unavailable', 'Слишком много зарегистрированных клиентов. Повторите позже.', 503);
         }
 
-        $uris = $payload['redirect_uris'] ?? null;
-        if (!is_array($uris) || $uris === [] || !array_is_list($uris) || count($uris) > self::MAX_REDIRECTS) {
+        $grants = $payload['grant_types'] ?? ['authorization_code', 'refresh_token'];
+        $allowedGrants = ['authorization_code', 'refresh_token', self::DEVICE_GRANT];
+        if (!is_array($grants) || $grants === [] || array_diff($grants, $allowedGrants) !== []) {
+            throw new OAuthException('invalid_client_metadata', 'Поддерживаются grant_types: authorization_code, refresh_token, ' . self::DEVICE_GRANT . '.');
+        }
+        $deviceOnly = array_diff($grants, [self::DEVICE_GRANT, 'refresh_token']) === [];
+        $uris = $payload['redirect_uris'] ?? ($deviceOnly ? [] : null);
+        if (!is_array($uris) || ($uris === [] && !$deviceOnly) || !array_is_list($uris) || count($uris) > self::MAX_REDIRECTS) {
             throw new OAuthException('invalid_redirect_uri', 'redirect_uris: нужен список от 1 до ' . self::MAX_REDIRECTS . ' адресов.');
         }
         foreach ($uris as $uri) {
@@ -107,11 +121,6 @@ final class OAuthServer
         if ($method !== 'none') {
             throw new OAuthException('invalid_client_metadata', 'Поддерживается только token_endpoint_auth_method = none (публичный клиент с PKCE).');
         }
-        $grants = $payload['grant_types'] ?? ['authorization_code', 'refresh_token'];
-        if (!is_array($grants) || array_diff($grants, ['authorization_code', 'refresh_token']) !== []) {
-            throw new OAuthException('invalid_client_metadata', 'Поддерживаются grant_types: authorization_code, refresh_token.');
-        }
-
         $name = $payload['client_name'] ?? 'Клиент MCP';
         $name = is_string($name) ? trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $name) ?? '') : '';
         $name = mb_substr($name !== '' ? $name : 'Клиент MCP', 0, 100);
@@ -125,8 +134,8 @@ final class OAuthServer
             'client_name' => $name,
             'redirect_uris' => array_values($uris),
             'token_endpoint_auth_method' => 'none',
-            'grant_types' => ['authorization_code', 'refresh_token'],
-            'response_types' => ['code'],
+            'grant_types' => array_values($grants),
+            'response_types' => $deviceOnly ? [] : ['code'],
             'scope' => self::SCOPE,
         ];
     }
@@ -235,6 +244,151 @@ final class OAuthServer
         ]);
     }
 
+    // ---- поток устройства (RFC 8628) ------------------------------------------------------------------
+
+    /**
+     * Старт: клиент получает device_code (секрет, для опроса) и user_code (для человека).
+     * Если client_id не передан, клиент создаётся автоматически (его client_id возвращается в ответе).
+     * @param array<string,mixed> $form
+     * @return array<string,mixed>
+     */
+    public function startDevice(array $form, string $ip): array
+    {
+        $now = $this->now();
+        $this->store->purge($now, self::UNUSED_CLIENT_TTL);
+        if ($this->store->countDevices($now) >= self::DEVICE_MAX_PENDING) {
+            throw new OAuthException('temporarily_unavailable', 'Слишком много ожидающих подтверждения подключений. Повторите через несколько минут.', 503);
+        }
+
+        $clientId = self::str($form, 'client_id');
+        if ($clientId !== '') {
+            if ($this->store->getClient($clientId) === null) {
+                throw new OAuthException('invalid_client', 'Неизвестный клиент.', 401);
+            }
+        } else {
+            if ($this->store->countClients() >= self::MAX_CLIENTS) {
+                throw new OAuthException('temporarily_unavailable', 'Слишком много зарегистрированных клиентов. Повторите позже.', 503);
+            }
+            $name = trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', self::str($form, 'client_name')) ?? '');
+            $name = mb_substr($name !== '' ? $name : 'Клиент MCP (устройство)', 0, 100);
+            $clientId = 'sopc_' . bin2hex(random_bytes(16));
+            $this->store->saveClient(['client_id' => $clientId, 'name' => $name, 'redirect_uris' => [], 'created' => $now]);
+        }
+
+        $deviceCode = 'sop_dc_' . self::randomToken();
+        $userCode = self::generateUserCode();
+        $this->store->saveDevice([
+            'device_hash' => self::hash($deviceCode),
+            'user_hash' => self::hash(self::normalizeUserCode($userCode)),
+            'client_id' => $clientId,
+            'status' => 'pending',
+            'user_id' => 0,
+            'expires' => $now + self::DEVICE_TTL,
+            'interval' => self::DEVICE_INTERVAL,
+            'last_poll' => 0,
+            'ip' => mb_substr($ip, 0, 64),
+            'created' => $now,
+        ]);
+
+        $verify = $this->issuer() . '/verify/';
+
+        return [
+            'device_code' => $deviceCode,
+            'user_code' => $userCode,
+            'verification_uri' => $verify,
+            'verification_uri_complete' => $verify . '?user_code=' . $userCode,
+            'expires_in' => self::DEVICE_TTL,
+            'interval' => self::DEVICE_INTERVAL,
+            'client_id' => $clientId,
+        ];
+    }
+
+    /** Нормализация введённого человеком кода: регистр, дефисы и пробелы не важны. Пустая строка, если код не может быть верным. */
+    public static function normalizeUserCode(string $input): string
+    {
+        $code = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $input) ?? '');
+
+        return preg_match('/^[' . self::USER_CODE_ALPHABET . ']{8}$/', $code) === 1 ? $code : '';
+    }
+
+    private static function generateUserCode(): string
+    {
+        $alphabet = self::USER_CODE_ALPHABET;
+        $code = '';
+        for ($i = 0; $i < 8; $i++) {
+            $code .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+        }
+
+        return substr($code, 0, 4) . '-' . substr($code, 4);
+    }
+
+    /**
+     * Запрос, ожидающий подтверждения, для страницы администратора.
+     * @return array{client:array<string,mixed>,user_code:string,ip:string,created:int}|null
+     */
+    public function pendingDevice(string $userCodeInput): ?array
+    {
+        $normalized = self::normalizeUserCode($userCodeInput);
+        $device = $normalized !== '' ? $this->store->getDeviceByUserCode(self::hash($normalized)) : null;
+        if ($device === null || $device['status'] !== 'pending' || $device['expires'] < $this->now()) {
+            return null;
+        }
+        $client = $this->store->getClient((string) $device['client_id']);
+        if ($client === null) {
+            return null;
+        }
+
+        return ['client' => $client, 'user_code' => substr($normalized, 0, 4) . '-' . substr($normalized, 4), 'ip' => (string) $device['ip'], 'created' => (int) $device['created']];
+    }
+
+    /** Решение администратора по коду устройства. Возвращает false, если код неверный, просрочен или уже обработан. */
+    public function decideDevice(string $userCodeInput, bool $approve, int $userId): bool
+    {
+        if ($this->pendingDevice($userCodeInput) === null) {
+            return false;
+        }
+
+        return $this->store->decideDevice(self::hash(self::normalizeUserCode($userCodeInput)), $approve ? 'approved' : 'denied', $userId);
+    }
+
+    /** @param array<string,mixed> $client @param array<string,mixed> $form @return array<string,mixed> */
+    private function pollDevice(array $client, array $form): array
+    {
+        $value = self::str($form, 'device_code');
+        $hash = self::hash($value);
+        $device = $value !== '' ? $this->store->getDevice($hash) : null;
+        if ($device === null || $device['client_id'] !== $client['client_id']) {
+            throw new OAuthException('invalid_grant', 'Код устройства недействителен.');
+        }
+        $now = $this->now();
+        if ($device['expires'] < $now) {
+            $this->store->consumeDevice($hash);
+            throw new OAuthException('expired_token', 'Срок кода устройства истёк. Начните подключение заново.');
+        }
+
+        // Слишком частый опрос: интервал увеличивается на 5 секунд (RFC 8628, п. 3.5).
+        if ($device['last_poll'] > 0 && $now - $device['last_poll'] < $device['interval']) {
+            $this->store->touchDevice($hash, $now, $device['interval'] + 5);
+            throw new OAuthException('slow_down', 'Слишком частый опрос. Увеличьте интервал не меньше чем на 5 секунд.');
+        }
+        $this->store->touchDevice($hash, $now, $device['interval']);
+
+        if ($device['status'] === 'pending') {
+            throw new OAuthException('authorization_pending', 'Ожидается подтверждение на странице сайта.');
+        }
+        if ($device['status'] === 'denied') {
+            $this->store->consumeDevice($hash);
+            throw new OAuthException('access_denied', 'Подключение отклонено администратором.');
+        }
+        // Подтверждено: запись одноразовая, при гонке двух запросов токены получит только один.
+        $consumed = $this->store->consumeDevice($hash);
+        if ($consumed === null || $consumed['status'] !== 'approved') {
+            throw new OAuthException('invalid_grant', 'Код устройства уже использован.');
+        }
+
+        return $this->issue($client['client_id'], (int) $consumed['user_id'], bin2hex(random_bytes(12)));
+    }
+
     // ---- токены -------------------------------------------------------------------------------------
 
     /**
@@ -254,7 +408,8 @@ final class OAuthServer
         return match ($grant) {
             'authorization_code' => $this->exchangeCode($client, $form),
             'refresh_token' => $this->refresh($client, $form),
-            default => throw new OAuthException('unsupported_grant_type', 'Поддерживаются authorization_code и refresh_token.'),
+            self::DEVICE_GRANT => $this->pollDevice($client, $form),
+            default => throw new OAuthException('unsupported_grant_type', 'Поддерживаются authorization_code, refresh_token и ' . self::DEVICE_GRANT . '.'),
         };
     }
 

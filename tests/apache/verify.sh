@@ -111,6 +111,7 @@ req GET /site.ops/mcp -H 'Authorization: Bearer sop_statictoken'
 check "GET /site.ops/mcp — 405 (только POST), не редирект" "$([ "$CODE" = 405 ] && [ -z "$LOC" ]; echo $?)"
 req GET /site.ops/admin;            check "GET /site.ops/admin — дошло до страницы администратора" "$([ "$CODE" = 200 ] && [ "$BODY" = ADMIN-STUB ]; echo $?)"
 req GET /site.ops/admin/;           check "GET /site.ops/admin/ — то же" "$([ "$CODE" = 200 ] && [ "$BODY" = ADMIN-STUB ]; echo $?)"
+req GET '/site.ops/oauth/verify?user_code=BBBB-BBBB'; check "GET /site.ops/oauth/verify — дошло до страницы подтверждения кода" "$([ "$CODE" = 200 ] && [ "$BODY" = ADMIN-STUB ] && [ -z "$LOC" ]; echo $?)"
 req GET '/site.ops/oauth/authorize?client_id=x'; check "GET /site.ops/oauth/authorize — дошло до страницы согласия" "$([ "$CODE" = 200 ] && [ "$BODY" = ADMIN-STUB ] && [ -z "$LOC" ]; echo $?)"
 
 echo "== OAuth"
@@ -142,6 +143,13 @@ req POST /site.ops/oauth/token -d 'grant_type=authorization_code&client_id=sopc_
 check "POST /site.ops/oauth/token (без слэша) — 401 invalid_client в JSON" "$([ "$CODE" = 401 ] && printf '%s' "$BODY" | grep -q invalid_client && [ -z "$LOC" ]; echo $?)"
 req POST /site.ops/oauth/token/ -d 'grant_type=authorization_code&client_id=sopc_unknown'
 check "POST /site.ops/oauth/token/ — 401 invalid_client" "$([ "$CODE" = 401 ] && printf '%s' "$BODY" | grep -q invalid_client; echo $?)"
+req POST /site.ops/oauth/device -d 'client_name=CLI'
+check "POST /site.ops/oauth/device (без слэша) — 200, коды и ссылка" "$([ "$CODE" = 200 ] && [ -z "$LOC" ] && printf '%s' "$BODY" | grep -q '"user_code"' && printf '%s' "$BODY" | grep -q 'verify'; echo $?)"
+req POST /site.ops/oauth/device/ -d 'client_name=CLI'
+check "POST /site.ops/oauth/device/ (со слэшем) — 200" "$([ "$CODE" = 200 ]; echo $?)"
+# База в стенде — заглушка без данных: опрос неизвестного кода должен вернуть JSON-ошибку, а не редирект или 500.
+req POST /site.ops/oauth/token --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:device_code' --data-urlencode 'device_code=sop_dc_x' --data-urlencode 'client_id=sopc_unknown'
+check "опрос токена по устройству — JSON-ошибка OAuth (401 invalid_client), не редирект" "$([ "$CODE" = 401 ] && [ -z "$LOC" ] && printf '%s' "$BODY" | grep -q invalid_client; echo $?)"
 req POST /site.ops/oauth/revoke -d 'token=x'
 check "POST /site.ops/oauth/revoke — 200" "$([ "$CODE" = 200 ] && [ -z "$LOC" ]; echo $?)"
 
