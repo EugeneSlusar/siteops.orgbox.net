@@ -50,4 +50,7 @@ interface IblockGateway
 
     /** @param array<string,mixed> $fields */
     public function updateSection(int $id, array $fields): void;
+
+    /** Сброс кеша: инфоблока (по тегу) или всего кеша сайта, если $iblockId = null. */
+    public function clearCache(?int $iblockId): void;
 }

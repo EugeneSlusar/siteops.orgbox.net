@@ -119,6 +119,15 @@ final class IblockToolset
             'required' => ['id', 'fields'],
         ], true, fn (array $a): array => $this->sectionUpdate($a)));
 
+        $registry->register(new Tool('cache_clear', 'Сбросить кеш сайта, чтобы изменения появились на страницах. scope=iblock (по умолчанию): кеш одного инфоблока; scope=all: весь кеш сайта (на время сайт может работать медленнее).', [
+            'type' => 'object',
+            'properties' => [
+                'scope' => ['type' => 'string', 'enum' => ['iblock', 'all']],
+                'iblock_id' => $int,
+                'dry_run' => $dryRun,
+            ],
+        ], true, fn (array $a): array => $this->cacheClear($a)));
+
     }
 
     // ---- чтение -------------------------------------------------------------------------------
@@ -259,6 +268,30 @@ final class IblockToolset
         $this->audit->log('section.update', ['id' => $id, 'iblock_id' => $before['iblock_id'], 'changes' => $this->shorten($changes)]);
 
         return ['updated' => true, 'id' => $id, 'changes' => $changes];
+    }
+
+    /** @return array<string,mixed> */
+    private function cacheClear(array $args): array
+    {
+        $scope = $args['scope'] ?? 'iblock';
+        if (!in_array($scope, ['iblock', 'all'], true)) {
+            throw new ToolException('Параметр scope должен быть iblock или all.');
+        }
+        if (!$this->settings->writesEnabled()) {
+            throw new ToolException('Запись отключена: включите режим «чтение и запись» в настройках модуля.');
+        }
+        $iblockId = null;
+        if ($scope === 'iblock') {
+            $iblockId = $this->writableIblock($args['iblock_id'] ?? null);
+        }
+        if (!empty($args['dry_run'])) {
+            return ['dry_run' => true, 'scope' => $scope, 'iblock_id' => $iblockId];
+        }
+
+        $this->gateway->clearCache($iblockId);
+        $this->audit->log('cache.clear', ['scope' => $scope, 'iblock_id' => $iblockId]);
+
+        return ['cleared' => true, 'scope' => $scope, 'iblock_id' => $iblockId];
     }
 
     // ---- проверки и нормализация --------------------------------------------------------------

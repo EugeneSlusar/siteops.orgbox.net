@@ -107,6 +107,11 @@ final class FakeGateway implements IblockGateway
         return $id;
     }
 
+    public function clearCache(?int $iblockId): void
+    {
+        $this->calls[] = 'clearCache:' . ($iblockId ?? 'all');
+    }
+
     public function updateSection(int $id, array $fields): void
     {
         $this->calls[] = 'updateSection:' . $id;

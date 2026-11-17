@@ -254,6 +254,23 @@ final class BitrixIblockGateway implements IblockGateway
         }
     }
 
+    public function clearCache(?int $iblockId): void
+    {
+        if ($iblockId !== null) {
+            \CIBlock::clearIblockTagCache($iblockId);
+
+            return;
+        }
+        if (!function_exists('BXClearCache')) {
+            throw new RuntimeException('Сброс кеша недоступен: функция BXClearCache не найдена.');
+        }
+        BXClearCache(true);
+        \Bitrix\Main\Application::getInstance()->getManagedCache()->cleanAll();
+        if (isset($GLOBALS['stackCacheManager']) && is_object($GLOBALS['stackCacheManager'])) {
+            $GLOBALS['stackCacheManager']->CleanAll();
+        }
+    }
+
     /**
      * Временный файл → массив для CIBlockElement (старый файл Битрикс удаляет сам при замене).
      *

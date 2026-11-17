@@ -236,3 +236,28 @@ test('RawRow: берутся исходные значения (~поле), а �
     assertSame('', RawRow::string($row, 'НЕТ_ТАКОГО'));
     assertSame('', RawRow::string(['X' => ['массив']], 'X'), 'нескалярное значение не превращается в мусор');
 });
+
+test('кеш: сброс инфоблока, журнал, dry_run и запрет вне списка', function () use ($rw): void {
+    [$server, $gateway, $audit] = toolsetServer($rw);
+    assertSame(true, callTool($server, 'cache_clear', ['iblock_id' => 1, 'dry_run' => true])['data']['dry_run']);
+    assertSame([], $gateway->calls);
+    $r = callTool($server, 'cache_clear', ['iblock_id' => 1]);
+    assertSame(true, $r['data']['cleared']);
+    assertSame(['clearCache:1'], $gateway->calls);
+    assertSame('cache.clear', $audit->entries[0][0]);
+    assertTrue(callTool($server, 'cache_clear', ['iblock_id' => 2])['isError']);
+    assertTrue(callTool($server, 'cache_clear', [])['isError']);
+});
+
+test('кеш: весь кеш сайта, неверный scope отклоняется', function () use ($rw): void {
+    [$server, $gateway] = toolsetServer($rw);
+    assertSame(true, callTool($server, 'cache_clear', ['scope' => 'all'])['data']['cleared']);
+    assertSame(['clearCache:all'], $gateway->calls);
+    assertTrue(callTool($server, 'cache_clear', ['scope' => 'everything'])['isError']);
+});
+
+test('кеш: в режиме чтения инструмент недоступен', function (): void {
+    [$server, $gateway] = toolsetServer(['allowed_iblocks' => '1']);
+    assertTrue(callTool($server, 'cache_clear', ['scope' => 'all'])['isError']);
+    assertSame([], $gateway->calls);
+});
