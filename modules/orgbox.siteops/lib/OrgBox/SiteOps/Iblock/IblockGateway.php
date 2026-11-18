@@ -77,6 +77,26 @@ interface IblockGateway
      */
     public function updateProduct(int $id, int $iblockId, array $prices, ?float $quantity, array $stores, array $properties): void;
 
+    /**
+     * Связь «товарный инфоблок → инфоблок торговых предложений» из модуля catalog; null, если связи нет.
+     *
+     * @return array{offers_iblock_id:int,link_code:string}|null link_code — код свойства, которое привязывает предложение к товару
+     */
+    public function offerRelation(int $productIblockId): ?array;
+
+    /** Тип товара каталога: 1 — простой, 3 — с торговыми предложениями (штатные значения модуля catalog). */
+    public function setProductType(int $id, int $type): void;
+
+    /**
+     * Создать торговое предложение: элемент в инфоблоке предложений, свойство связи с товаром и запись в каталоге
+     * как предложение (тип 4). Если запись в каталоге не удалась, элемент не удаляется: он остаётся неактивным,
+     * а исключение называет его id.
+     *
+     * @param array<string,mixed> $fields
+     * @param array<string,mixed> $properties
+     */
+    public function createOffer(int $offerIblockId, int $parentId, string $linkCode, array $fields, array $properties): int;
+
     /** Сброс кеша: инфоблока (по тегу) или всего кеша сайта, если $iblockId = null. */
     public function clearCache(?int $iblockId): void;
 }

@@ -389,6 +389,43 @@ final class BitrixIblockGateway implements IblockGateway
         }
     }
 
+    public function offerRelation(int $productIblockId): ?array
+    {
+        $this->catalog();
+        $info = \CCatalogSKU::GetInfoByProductIBlock($productIblockId);
+        if (!is_array($info) || (int) ($info['IBLOCK_ID'] ?? 0) <= 0 || (int) ($info['SKU_PROPERTY_ID'] ?? 0) <= 0) {
+            return null;
+        }
+        $property = \CIBlockProperty::GetByID((int) $info['SKU_PROPERTY_ID'])->Fetch();
+        $linkCode = is_array($property) ? (string) ($property['CODE'] ?? '') : '';
+        if ($linkCode === '') {
+            return null;
+        }
+
+        return ['offers_iblock_id' => (int) $info['IBLOCK_ID'], 'link_code' => $linkCode];
+    }
+
+    public function setProductType(int $id, int $type): void
+    {
+        $this->catalog();
+        if (!\CCatalogProduct::Update($id, ['TYPE' => $type])) {
+            throw new RuntimeException('Не удалось сменить тип товара: ' . $this->catalogError());
+        }
+    }
+
+    public function createOffer(int $offerIblockId, int $parentId, string $linkCode, array $fields, array $properties): int
+    {
+        $this->catalog();
+        // Свойство связи задаёт сам инструмент: пользовательское значение с тем же кодом сюда не попадает.
+        $id = $this->createElement($offerIblockId, $fields, $properties + [$linkCode => $parentId]);
+        if (!\CCatalogProduct::Add(['ID' => $id, 'TYPE' => 4, 'QUANTITY' => 0])) {
+            throw new RuntimeException('Элемент предложения создан (id ' . $id . ', неактивен), но не зарегистрирован в каталоге: '
+                . $this->catalogError() . '. Элемент не удалён: проверьте его в админке и при необходимости доделайте вручную.');
+        }
+
+        return $id;
+    }
+
     private function catalog(): void
     {
         if (!Loader::includeModule('catalog')) {

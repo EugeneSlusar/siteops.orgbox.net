@@ -48,7 +48,9 @@ final class FakeGateway implements IblockGateway
 
     public function getIblock(int $id): ?array
     {
-        foreach ($this->listIblocks(null) as $row) {
+        // Инфоблок торговых предложений (3) известен шлюзу, но в список iblock_list не включён: прежние проверки списка не меняем.
+        $all = array_merge($this->listIblocks(null), [['id' => 3, 'type' => 'catalog', 'code' => 'offers', 'name' => 'Торговые предложения', 'active' => true, 'elements' => 0]]);
+        foreach ($all as $row) {
             if ($row['id'] === $id) {
                 return ['id' => $row['id'], 'type' => $row['type'], 'code' => $row['code'], 'name' => $row['name']];
             }
@@ -72,6 +74,16 @@ final class FakeGateway implements IblockGateway
             ['code' => 'MINIMUM_PRICE', 'name' => 'Минимальная цена', 'type' => 'N', 'multiple' => false, 'required' => false, 'enum' => []],
             ['code' => 'MAXIMUM_PRICE', 'name' => 'Максимальная цена', 'type' => 'N', 'multiple' => false, 'required' => false, 'enum' => []],
         ] : [];
+        if ($iblockId === 3) {
+            $all = [
+                ['code' => 'CML2_LINK', 'name' => 'Привязка к товару', 'type' => 'E', 'multiple' => false, 'required' => false, 'enum' => []],
+                ['code' => 'COLOR_REF', 'name' => 'Цвет', 'type' => 'S', 'multiple' => false, 'required' => false, 'enum' => []],
+                ['code' => 'ARTICLE', 'name' => 'Артикул', 'type' => 'S', 'multiple' => false, 'required' => false, 'enum' => []],
+                ['code' => 'MORE_PHOTO', 'name' => 'Фото', 'type' => 'F', 'multiple' => true, 'required' => false, 'enum' => []],
+                ['code' => 'MINIMUM_PRICE', 'name' => 'Минимальная цена', 'type' => 'N', 'multiple' => false, 'required' => false, 'enum' => []],
+                ['code' => 'MAXIMUM_PRICE', 'name' => 'Максимальная цена', 'type' => 'N', 'multiple' => false, 'required' => false, 'enum' => []],
+            ];
+        }
 
         return array_values(array_filter($all, fn (array $p): bool => !in_array($p['code'], $this->hiddenProperties, true)));
     }
@@ -179,7 +191,56 @@ final class FakeGateway implements IblockGateway
 
     public function getProduct(int $id): ?array
     {
-        return $this->products[$id] ?? null;
+        $product = $this->products[$id] ?? null;
+        if ($product === null) {
+            return null;
+        }
+        // Предложения — элементы инфоблока 3, привязанные свойством CML2_LINK к товару.
+        $product['offers'] = [];
+        foreach ($this->elements as $element) {
+            if (($element['iblock_id'] ?? null) === 3 && (string) ($element['properties']['CML2_LINK'] ?? '') === (string) $id) {
+                $product['offers'][] = ['id' => $element['id'], 'name' => $element['name']];
+            }
+        }
+
+        return $product;
+    }
+
+    public function offerRelation(int $productIblockId): ?array
+    {
+        return $productIblockId === 1 ? ['offers_iblock_id' => 3, 'link_code' => 'CML2_LINK'] : null;
+    }
+
+    public function setProductType(int $id, int $type): void
+    {
+        $this->calls[] = 'setProductType:' . $id . ':' . $type;
+        $this->products[$id]['type'] = $type;
+    }
+
+    /** Имитация сбоя: элемент предложения создан, но в каталог как предложение не зарегистрирован. */
+    public bool $failOfferRegistration = false;
+
+    public function createOffer(int $offerIblockId, int $parentId, string $linkCode, array $fields, array $properties): int
+    {
+        $this->calls[] = 'createOffer:' . $parentId;
+        $id = $this->nextId++;
+        $this->elements[$id] = [
+            'id' => $id, 'iblock_id' => $offerIblockId, 'name' => (string) $fields['NAME'], 'code' => (string) ($fields['CODE'] ?? ''),
+            'active' => (bool) $fields['ACTIVE'], 'sort' => 500, 'section_id' => 0,
+            'preview_text' => '', 'preview_text_type' => 'text', 'detail_text' => '', 'detail_text_type' => 'text',
+            'modified' => '', 'url' => '/o/' . $id . '/', 'properties' => $this->dropWrites ? [] : [$linkCode => (string) $parentId],
+        ];
+        foreach ($properties as $code => $value) {
+            $this->applyProperty($id, $code, $value);
+        }
+        if ($this->failOfferRegistration) {
+            throw new \RuntimeException('Элемент предложения создан (id ' . $id . ', неактивен), но не зарегистрирован в каталоге: причина из теста. Элемент не удалён.');
+        }
+        $parentStores = $this->products[$parentId]['stores'] ?? [];
+        $this->products[$id] = ['quantity' => 0.0, 'reserved' => 0.0, 'available' => false, 'type' => 4, 'prices' => [], 'offers' => [],
+            'stores' => array_map(static fn (array $s): array => ['title' => $s['title'], 'amount' => 0.0], $parentStores)];
+
+        return $id;
     }
 
     public function updateProduct(int $id, int $iblockId, array $prices, ?float $quantity, array $stores, array $properties): void

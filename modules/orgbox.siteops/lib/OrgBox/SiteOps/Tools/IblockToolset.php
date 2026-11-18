@@ -122,6 +122,32 @@ final class IblockToolset
             'required' => ['id'],
         ], true, fn (array $a): array => $this->productUpdate($a)));
 
+        $registry->register(new Tool('product_set_type', 'Сменить тип товара каталога: simple (простой) или with_offers (с торговыми предложениями). '
+            . 'Перевод в with_offers требует связи инфоблока с инфоблоком предложений в модуле catalog. '
+            . 'Обратно в simple — только если предложений нет. Цена и остаток у товара с предложениями задаются у предложений. Удаления нет.', [
+            'type' => 'object',
+            'properties' => [
+                'id' => $int,
+                'type' => ['type' => 'string', 'enum' => ['simple', 'with_offers']],
+                'dry_run' => $dryRun,
+            ],
+            'required' => ['id', 'type'],
+        ], true, fn (array $a): array => $this->productSetType($a)));
+
+        $registry->register(new Tool('offer_create', 'Создать торговое предложение (SKU) у товара с типом with_offers: элемент в инфоблоке предложений, '
+            . 'привязка к товару (свойство связи задаёт инструмент), запись в каталоге как предложение. Элемент создаётся неактивным, пока не указано иное. '
+            . 'Свойства: цвет, артикул, картинки и т. д. по коду инфоблока предложений. Цену и остаток задайте через product_update с id предложения. '
+            . 'Удаления нет. Инфоблок предложений должен быть разрешён для записи.', [
+            'type' => 'object',
+            'properties' => [
+                'parent_id' => $int,
+                'fields' => ['type' => 'object', 'description' => 'NAME обязателен. ' . self::FIELDS_HELP],
+                'properties' => ['type' => 'object', 'description' => self::PROPERTIES_HELP],
+                'dry_run' => $dryRun,
+            ],
+            'required' => ['parent_id', 'fields'],
+        ], true, fn (array $a): array => $this->offerCreate($a)));
+
         $registry->register(new Tool('element_update', 'Изменить поля, свойства и файлы элемента. Удаления элемента нет; снять с публикации можно через ACTIVE=false. После записи значения перечитываются из базы.', [
             'type' => 'object',
             'properties' => [
@@ -393,11 +419,17 @@ final class IblockToolset
 
         // Базовая цена дублируется в свойства элемента MINIMUM_PRICE и MAXIMUM_PRICE (их читают другие модули сайта).
         $properties = [];
+        $notSynced = [];
         $basePrice = $this->basePriceFrom($prices);
         if ($basePrice !== null) {
             $value = self::priceProperty($basePrice);
             foreach (self::PRICE_PROPERTIES as $code) {
                 if (!$this->hasProperty($iblockId, $code)) {
+                    // У торгового предложения свойств мин./макс. цены может не быть: цену пишем, а синхронизацию пропускаем и говорим об этом.
+                    if ((self::PRODUCT_TYPES[$before['type']] ?? '') === 'offer') {
+                        $notSynced[] = $code;
+                        continue;
+                    }
                     throw new ToolException('В инфоблоке ' . $iblockId . ' нет свойства ' . $code . ' (Минимальная/Максимальная цена): базовую цену без него не записать. Ничего не записано.');
                 }
                 $current = $element['properties'][$code] ?? null;
@@ -444,10 +476,126 @@ final class IblockToolset
                 $notApplied[] = $key;
             }
         }
-        $this->audit->log('product.update', ['id' => $id, 'iblock_id' => $element['iblock_id'], 'changes' => $report, 'not_applied' => $notApplied]);
+        $this->audit->log('product.update', ['id' => $id, 'iblock_id' => $element['iblock_id'], 'changes' => $report, 'not_applied' => $notApplied, 'not_synced' => $notSynced]);
 
         return ['updated' => true, 'id' => $id, 'changes' => $report, 'verified' => $notApplied === []]
-            + ($notApplied === [] ? [] : ['not_applied' => $notApplied]);
+            + ($notApplied === [] ? [] : ['not_applied' => $notApplied])
+            + ($notSynced === [] ? [] : ['not_synced' => $notSynced, 'note' => 'В инфоблоке предложений нет свойств ' . implode(' и ', $notSynced) . ': базовая цена записана в каталог, синхронизация с этими свойствами пропущена.']);
+    }
+
+    /** Типы товара, которые переключает product_set_type: simple ↔ with_offers. */
+    private const PRODUCT_TYPE_CODES = ['simple' => 1, 'with_offers' => 3];
+
+    /** @return array<string,mixed> */
+    private function productSetType(array $args): array
+    {
+        $id = $this->intArg($args['id'] ?? null, 'id');
+        $target = $args['type'] ?? null;
+        if (!is_string($target) || !isset(self::PRODUCT_TYPE_CODES[$target])) {
+            throw new ToolException('Параметр type: simple (простой товар) или with_offers (товар с торговыми предложениями).');
+        }
+        $element = $this->gateway->getElement($id) ?? throw new ToolException('Элемент не найден.');
+        $iblockId = $this->writableIblock($element['iblock_id'] ?? null);
+        $before = $this->gateway->getProduct($id) ?? throw new ToolException('Элемент ' . $id . ' не товар каталога.');
+        $current = self::PRODUCT_TYPES[$before['type']] ?? 'other';
+
+        if ($current === $target) {
+            return ['updated' => false, 'id' => $id, 'message' => 'Тип уже ' . $target . '.'];
+        }
+        if (!in_array($current, ['simple', 'with_offers'], true)) {
+            throw new ToolException('Тип «' . $current . '» этим инструментом не меняется: только simple ↔ with_offers.');
+        }
+        if ($target === 'simple' && $before['offers'] !== []) {
+            throw new ToolException('У товара ' . $id . ' есть торговые предложения (' . count($before['offers']) . ': '
+                . implode(', ', array_column($before['offers'], 'id')) . '). В простой товар переводить нельзя, пока они есть. Ничего не записано.');
+        }
+        if ($target === 'with_offers' && $this->gateway->offerRelation($iblockId) === null) {
+            throw new ToolException('Инфоблок ' . $iblockId . ' не связан с инфоблоком торговых предложений в модуле catalog. '
+                . 'Настройте связь в админке (Торговый каталог → Настройки → Торговые предложения) и повторите. Ничего не записано.');
+        }
+        if (!empty($args['dry_run'])) {
+            return ['dry_run' => true, 'id' => $id, 'product_type' => ['before' => $current, 'after' => $target]];
+        }
+
+        $this->gateway->setProductType($id, self::PRODUCT_TYPE_CODES[$target]);
+        $after = $this->gateway->getProduct($id) ?? throw new ToolException('Товар пропал после записи.');
+        $actual = self::PRODUCT_TYPES[$after['type']] ?? 'other';
+        $verified = $actual === $target;
+        $this->audit->log('product.type', ['id' => $id, 'iblock_id' => $iblockId, 'before' => $current, 'after' => $actual, 'verified' => $verified]);
+
+        $result = ['updated' => true, 'id' => $id, 'product_type' => ['before' => $current, 'after' => $actual], 'verified' => $verified];
+        if (!$verified) {
+            $result['expected'] = $target;
+        }
+        if ($target === 'with_offers') {
+            $result['note'] = 'Цена и остаток теперь задаются у торговых предложений: offer_create, затем product_update с id предложения.';
+        }
+
+        return $result;
+    }
+
+    /** @return array<string,mixed> */
+    private function offerCreate(array $args): array
+    {
+        $parentId = $this->intArg($args['parent_id'] ?? null, 'parent_id');
+        $parent = $this->gateway->getElement($parentId) ?? throw new ToolException('Родительский товар не найден.');
+        $parentIblock = $this->writableIblock($parent['iblock_id'] ?? null);
+        $product = $this->gateway->getProduct($parentId) ?? throw new ToolException('Элемент ' . $parentId . ' не товар каталога.');
+        $type = self::PRODUCT_TYPES[$product['type']] ?? 'other';
+        if ($type !== 'with_offers') {
+            throw new ToolException('Товар ' . $parentId . ' не с торговыми предложениями (тип: ' . $type . '). Сначала переведите его: product_set_type с type=with_offers.');
+        }
+        $relation = $this->gateway->offerRelation($parentIblock)
+            ?? throw new ToolException('Инфоблок ' . $parentIblock . ' не связан с инфоблоком торговых предложений в модуле catalog.');
+        $offerIblock = $this->writableIblock($relation['offers_iblock_id']);
+        $link = $relation['link_code'];
+
+        $fields = $this->normalizeFields($this->objectArg($args, 'fields'), self::ELEMENT_FIELDS);
+        if (!isset($fields['NAME']) || trim((string) $fields['NAME']) === '') {
+            throw new ToolException('Для создания предложения нужен fields.NAME.');
+        }
+        $fields += ['ACTIVE' => false];
+
+        $properties = $this->objectArg($args, 'properties');
+        if (array_key_exists($link, $properties)) {
+            throw new ToolException('Свойство связи ' . $link . ' задаёт сам инструмент (привязка к товару ' . $parentId . '). Уберите его из properties.');
+        }
+        [$write, $shown] = $this->normalizeProperties($offerIblock, $properties);
+        $shown[$link] = $parentId;
+
+        if (!empty($args['dry_run'])) {
+            return ['dry_run' => true, 'parent_id' => $parentId, 'iblock_id' => $offerIblock,
+                'would_create' => ['fields' => $this->shorten($fields), 'properties' => $this->shorten($shown)]];
+        }
+
+        try {
+            $id = $this->gateway->createOffer($offerIblock, $parentId, $link, $fields, $write);
+        } catch (\RuntimeException $exception) {
+            // Сообщение шлюза содержит причину и id элемента, который мог остаться неактивным: отдаём его пользователю, а не общую ошибку.
+            $this->audit->log('offer.create.failed', ['parent_id' => $parentId, 'iblock_id' => $offerIblock, 'error' => $exception->getMessage()]);
+            throw new ToolException($exception->getMessage());
+        }
+
+        // Проверка по базе: свойство связи, список предложений товара и запись в каталоге как предложение.
+        $after = $this->gateway->getElement($id) ?? throw new ToolException('Предложение пропало после записи.');
+        $parentAfter = $this->gateway->getProduct($parentId) ?? throw new ToolException('Товар пропал после записи.');
+        $offerAfter = $this->gateway->getProduct($id);
+        $checks = [
+            'link' => (string) ($after['properties'][$link] ?? '') === (string) $parentId,
+            'parent_offers' => in_array($id, array_column($parentAfter['offers'], 'id'), true),
+            'catalog' => $offerAfter !== null && (self::PRODUCT_TYPES[$offerAfter['type']] ?? '') === 'offer',
+        ];
+        $notApplied = array_keys(array_filter($checks, static fn (bool $ok): bool => !$ok));
+        $this->audit->log('offer.create', ['id' => $id, 'parent_id' => $parentId, 'iblock_id' => $offerIblock,
+            'fields' => $this->shorten($fields), 'properties' => $this->shorten($shown), 'not_applied' => $notApplied]);
+
+        $result = ['created' => true, 'id' => $id, 'parent_id' => $parentId, 'iblock_id' => $offerIblock,
+            'verified' => $notApplied === [], 'next' => 'Цена и остаток предложения: product_update с id ' . $id . '.'];
+        if ($notApplied !== []) {
+            $result['not_applied'] = $notApplied;
+        }
+
+        return $result;
     }
 
     /**
