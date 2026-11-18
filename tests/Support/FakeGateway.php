@@ -57,16 +57,23 @@ final class FakeGateway implements IblockGateway
         return null;
     }
 
+    /** Коды свойств, которых «нет» в инфоблоке (для проверки отказа). */
+    public array $hiddenProperties = [];
+
     public function getProperties(int $iblockId): array
     {
-        return $iblockId === 1 ? [
+        $all = $iblockId === 1 ? [
             ['code' => 'COLOR', 'name' => 'Цвет', 'type' => 'L', 'multiple' => false, 'required' => false, 'enum' => [1 => 'Красный', 2 => 'Синий']],
             ['code' => 'BRAND', 'name' => 'Бренд', 'type' => 'S', 'multiple' => false, 'required' => false, 'enum' => []],
             ['code' => 'TAGS', 'name' => 'Теги', 'type' => 'S', 'multiple' => true, 'required' => false, 'enum' => []],
             ['code' => 'PHOTO', 'name' => 'Фото', 'type' => 'F', 'multiple' => false, 'required' => false, 'enum' => []],
             ['code' => 'MORE_PHOTO', 'name' => 'Доп. фото', 'type' => 'F', 'multiple' => true, 'required' => false, 'enum' => []],
             ['code' => 'EMPTY_PROP', 'name' => 'Пустое', 'type' => 'S', 'multiple' => false, 'required' => false, 'enum' => []],
+            ['code' => 'MINIMUM_PRICE', 'name' => 'Минимальная цена', 'type' => 'N', 'multiple' => false, 'required' => false, 'enum' => []],
+            ['code' => 'MAXIMUM_PRICE', 'name' => 'Максимальная цена', 'type' => 'N', 'multiple' => false, 'required' => false, 'enum' => []],
         ] : [];
+
+        return array_values(array_filter($all, fn (array $p): bool => !in_array($p['code'], $this->hiddenProperties, true)));
     }
 
     public function listSections(int $iblockId, ?int $parentId, int $limit, int $page): array
@@ -175,11 +182,17 @@ final class FakeGateway implements IblockGateway
         return $this->products[$id] ?? null;
     }
 
-    public function updateProduct(int $id, array $prices, ?float $quantity, array $stores): void
+    public function updateProduct(int $id, int $iblockId, array $prices, ?float $quantity, array $stores, array $properties): void
     {
         $this->calls[] = 'updateProduct:' . $id;
         if ($this->dropWrites) {
             return;
+        }
+        if ($properties !== []) {
+            $this->calls[] = 'setProperties:' . $id;
+            foreach ($properties as $code => $value) {
+                $this->elements[$id]['properties'][$code] = $value;
+            }
         }
         foreach ($prices as $typeId => $item) {
             $found = false;

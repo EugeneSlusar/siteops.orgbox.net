@@ -335,7 +335,7 @@ final class BitrixIblockGateway implements IblockGateway
         ];
     }
 
-    public function updateProduct(int $id, array $prices, ?float $quantity, array $stores): void
+    public function updateProduct(int $id, int $iblockId, array $prices, ?float $quantity, array $stores, array $properties): void
     {
         $this->catalog();
         if (!is_array(\CCatalogProduct::GetByID($id))) {
@@ -382,6 +382,10 @@ final class BitrixIblockGateway implements IblockGateway
 
         if ($quantity !== null && !\CCatalogProduct::Update($id, ['QUANTITY' => $quantity])) {
             throw new RuntimeException('Не удалось записать остаток: ' . $this->catalogError());
+        }
+
+        if ($properties !== []) {
+            \CIBlockElement::SetPropertyValuesEx($id, $iblockId, $properties);
         }
     }
 
