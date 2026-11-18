@@ -97,8 +97,7 @@ $outcome = (static function () use ($siteops, $settings, $csrfPassed, $csrfDiagn
     } else {
         $client = $pending['client'];
         $mode = $settings->writesEnabled() ? 'чтение и запись' : 'только чтение';
-        $iblocks = $settings->allowedIblocks();
-        $scope = $iblocks === [] ? 'все инфоблоки (запись запрещена)' : 'инфоблоки ' . implode(', ', $iblocks);
+        $scope = $settings->accessSummary();
         ?>
 <div style="max-width:640px">
     <p><b><?=$h($client['name'])?></b> просит доступ к данным этого сайта через MCP.</p>

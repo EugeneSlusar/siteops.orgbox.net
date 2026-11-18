@@ -171,10 +171,9 @@ final class IblockToolset
     private function iblockList(array $args): array
     {
         $type = isset($args['type']) ? (string) $args['type'] : null;
-        $allowed = $this->settings->allowedIblocks();
         $items = array_values(array_filter(
             $this->gateway->listIblocks($type),
-            static fn (array $row): bool => $allowed === [] || in_array($row['id'], $allowed, true),
+            fn (array $row): bool => $this->settings->canReadIblock((int) $row['id']),
         ));
 
         return ['mode' => $this->settings->mode(), 'iblocks' => $items];
@@ -631,8 +630,7 @@ final class IblockToolset
     private function readableIblock(mixed $value): int
     {
         $id = $this->intArg($value, 'iblock_id');
-        $allowed = $this->settings->allowedIblocks();
-        if ($allowed !== [] && !in_array($id, $allowed, true)) {
+        if (!$this->settings->canReadIblock($id)) {
             throw new ToolException('Инфоблок ' . $id . ' недоступен: его нет в списке разрешённых.');
         }
         if ($this->gateway->getIblock($id) === null) {

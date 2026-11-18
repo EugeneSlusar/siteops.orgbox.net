@@ -95,8 +95,7 @@ $outcome = (static function () use ($siteops, $settings, $csrfPassed, $csrfDiagn
     }
 
     $mode = $settings->writesEnabled() ? 'чтение и запись' : 'только чтение';
-    $iblocks = $settings->allowedIblocks();
-    $scope = $iblocks === [] ? 'все инфоблоки (запись запрещена)' : 'инфоблоки ' . implode(', ', $iblocks);
+    $scope = $settings->accessSummary();
     $action = (string) $_SERVER['REQUEST_URI'];
 
     ob_start();
