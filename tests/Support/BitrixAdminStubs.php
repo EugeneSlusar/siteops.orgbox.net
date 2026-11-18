@@ -111,6 +111,10 @@ namespace {
             public function SetTitle(string $title): void
             {
             }
+
+            public function AddHeadString(string $string, bool $unique = false, bool $fileBody = false): void
+            {
+            }
         }
 
         final class TestUser

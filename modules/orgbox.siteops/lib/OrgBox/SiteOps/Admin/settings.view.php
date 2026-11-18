@@ -145,6 +145,17 @@ if ($siteops->oauthAvailable() && $settings->oauthEnabled()) {
     }
 }
 
+// Левая панель «Рабочий стол» (подменю «Рабочий стол 1» и «Избранное») здесь не нужна: скрываем только её.
+// Значки разделов слева остаются. Стиль попадает в <head>, поэтому добавляем его до prolog_admin_after.php.
+$APPLICATION->AddHeadString(<<<'HTML'
+<style>
+#global_submenu_desktop{display:none!important}
+#menucontainer:has(> #global_submenu_desktop.adm-global-submenu-active){display:none!important}
+#bx_menu_panel:has(#global_submenu_desktop.adm-global-submenu-active){width:auto!important}
+#bx_menu_panel:has(#global_submenu_desktop.adm-global-submenu-active) .adm-menu-wrapper{min-width:0!important;width:auto!important}
+</style>
+HTML);
+
 require $_SERVER['DOCUMENT_ROOT'] . '/bitrix/modules/main/include/prolog_admin_after.php';
 $APPLICATION->SetTitle('orgBox: SiteOps — MCP-сервер');
 foreach ($messages as [$type, $text]) {
