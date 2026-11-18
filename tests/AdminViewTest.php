@@ -113,6 +113,20 @@ test('страница настроек: режим и список инфобл
     });
 });
 
+test('страница настроек: галочка «читать все инфоблоки» сохраняется и отражается на форме', function (): void {
+    withSite(function (string $base): void {
+        $html = renderAdmin($base, 'POST', ['action' => 'save', 'mcp_enabled' => 'Y', 'mode' => 'readonly', 'read_all_iblocks' => 'Y', 'allowed_iblocks' => '5']);
+        assertTrue(Bootstrap::standalone($base)->settings()->readAllIblocks());
+        assertTrue(checked($html, 'read_all_iblocks'));
+        assertContains('чтение инфоблоков: все', $html);
+        $html = renderAdmin($base, 'POST', ['action' => 'save', 'mcp_enabled' => 'Y', 'mode' => 'readonly', 'allowed_iblocks' => '5, 6']); // галочка не отправлена
+        $s = Bootstrap::standalone($base)->settings();
+        assertTrue(!$s->readAllIblocks() && !checked($html, 'read_all_iblocks'));
+        assertSame([5, 6], $s->allowedIblocks());
+        assertContains('чтение инфоблоков: только перечисленные', $html);
+    });
+});
+
 test('страница настроек: не прошла проверка безопасности формы — об этом сказано вслух, ничего не записано', function (): void {
     withSite(function (string $base): void {
         $html = renderAdmin($base, 'POST', ['action' => 'save', 'mcp_enabled' => 'Y', 'oauth_enabled' => 'Y'], false);

@@ -69,11 +69,13 @@ interface IblockGateway
     /**
      * Записать цены (тип цены => цена и валюта), общий остаток и остатки по складам (склад => количество).
      * Цена записывается в строку без ограничений по количеству; создаётся, если её ещё нет.
+     * Свойства элемента ($properties: код => значение) записываются тем же вызовом, одной операцией.
      *
      * @param array<int,array{price:float,currency:?string}> $prices
      * @param array<int,float> $stores
+     * @param array<string,string> $properties
      */
-    public function updateProduct(int $id, array $prices, ?float $quantity, array $stores): void;
+    public function updateProduct(int $id, int $iblockId, array $prices, ?float $quantity, array $stores, array $properties): void;
 
     /** Сброс кеша: инфоблока (по тегу) или всего кеша сайта, если $iblockId = null. */
     public function clearCache(?int $iblockId): void;

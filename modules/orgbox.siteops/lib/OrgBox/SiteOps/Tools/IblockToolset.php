@@ -105,7 +105,12 @@ final class IblockToolset
             'type' => 'object', 'properties' => ['id' => $int], 'required' => ['id'],
         ], false, fn (array $a): array => $this->productGet($a)));
 
-        $registry->register(new Tool('product_update', 'Записать цены и остатки товара или торгового предложения. prices: {"тип цены (id или код, например BASE)": число или {"price": число, "currency": "RUB"}}; quantity: общий остаток; stores: {"id склада": количество}. При складском учёте общий остаток считается из складов, задавайте stores. После записи значения перечитываются.', [
+        $registry->register(new Tool('product_update', 'Записать цены и остатки товара или торгового предложения. '
+            . 'Что записывается: prices — цены в модуле catalog (таблица цен), по типам: {"тип цены (id или код, например BASE)": число или {"price": число, "currency": "RUB"}}; '
+            . 'quantity — общий остаток товара; stores — остатки по складам: {"id склада": количество}. При складском учёте общий остаток считается из складов, задавайте stores. '
+            . 'Базовая цена (тип с признаком «базовый», обычно BASE) дополнительно записывается в свойства элемента MINIMUM_PRICE и MAXIMUM_PRICE (строкой, той же записью). '
+            . 'Если этих свойств в инфоблоке нет, запись отклоняется до изменений. Другие свойства элемента этот инструмент не трогает (для них element_update). '
+            . 'После записи цены, остатки и свойства перечитываются из базы: verified=true только если всё совпало, иначе not_applied перечисляет несовпавшее.', [
             'type' => 'object',
             'properties' => [
                 'id' => $int,
@@ -166,10 +171,9 @@ final class IblockToolset
     private function iblockList(array $args): array
     {
         $type = isset($args['type']) ? (string) $args['type'] : null;
-        $allowed = $this->settings->allowedIblocks();
         $items = array_values(array_filter(
             $this->gateway->listIblocks($type),
-            static fn (array $row): bool => $allowed === [] || in_array($row['id'], $allowed, true),
+            fn (array $row): bool => $this->settings->canReadIblock((int) $row['id']),
         ));
 
         return ['mode' => $this->settings->mode(), 'iblocks' => $items];
@@ -354,7 +358,7 @@ final class IblockToolset
     {
         $id = $this->intArg($args['id'] ?? null, 'id');
         $element = $this->gateway->getElement($id) ?? throw new ToolException('Элемент не найден.');
-        $this->writableIblock($element['iblock_id'] ?? null);
+        $iblockId = $this->writableIblock($element['iblock_id'] ?? null);
         $before = $this->gateway->getProduct($id) ?? throw new ToolException('Элемент ' . $id . ' не товар каталога: цен и остатков у него нет.');
 
         $prices = $this->priceArgs($this->objectArg($args, 'prices'));
@@ -386,6 +390,24 @@ final class IblockToolset
                 $changes['STORE_' . $storeId] = ['before' => $before['stores'][$storeId]['amount'], 'after' => $amount];
             }
         }
+
+        // Базовая цена дублируется в свойства элемента MINIMUM_PRICE и MAXIMUM_PRICE (их читают другие модули сайта).
+        $properties = [];
+        $basePrice = $this->basePriceFrom($prices);
+        if ($basePrice !== null) {
+            $value = self::priceProperty($basePrice);
+            foreach (self::PRICE_PROPERTIES as $code) {
+                if (!$this->hasProperty($iblockId, $code)) {
+                    throw new ToolException('В инфоблоке ' . $iblockId . ' нет свойства ' . $code . ' (Минимальная/Максимальная цена): базовую цену без него не записать. Ничего не записано.');
+                }
+                $current = $element['properties'][$code] ?? null;
+                if (!$this->samePrice($current, $value)) {
+                    $changes['PROP_' . $code] = ['before' => $current, 'after' => $value];
+                    $properties[$code] = $value;
+                }
+            }
+        }
+
         if ($changes === []) {
             return ['updated' => false, 'id' => $id, 'message' => 'Значения уже совпадают, изменений нет.'];
         }
@@ -393,9 +415,10 @@ final class IblockToolset
             return ['dry_run' => true, 'id' => $id, 'changes' => $changes];
         }
 
-        $this->gateway->updateProduct($id, $prices, $quantity, $stores);
+        $this->gateway->updateProduct($id, $iblockId, $prices, $quantity, $stores, $properties);
 
         $after = $this->gateway->getProduct($id) ?? throw new ToolException('Товар пропал после записи.');
+        $afterElement = $this->gateway->getElement($id) ?? throw new ToolException('Элемент пропал после записи.');
         $report = [];
         $notApplied = [];
         foreach ($changes as $key => $change) {
@@ -405,6 +428,9 @@ final class IblockToolset
                 $expected = $change['after'];
                 $applied = $actual !== null && abs($actual['price'] - $expected['price']) < 1e-9
                     && ($expected['currency'] === null || $expected['currency'] === $actual['currency']);
+            } elseif (str_starts_with($key, 'PROP_')) {
+                $actual = $afterElement['properties'][substr($key, 5)] ?? null;
+                $applied = $this->samePrice($actual, $change['after']);
             } elseif ($key === 'QUANTITY') {
                 $actual = $after['quantity'];
                 $applied = abs($actual - $change['after']) < 1e-9;
@@ -495,6 +521,61 @@ final class IblockToolset
         return null;
     }
 
+    /** Свойства элемента, в которые дублируется базовая цена. Значения хранятся строкой. */
+    private const PRICE_PROPERTIES = ['MINIMUM_PRICE', 'MAXIMUM_PRICE'];
+
+    /**
+     * Цена типа с признаком «базовый» (на сайте это BASE), если она есть в записи, иначе null.
+     *
+     * @param array<int,array{price:float,currency:?string}> $prices ключ — id типа цены
+     */
+    private function basePriceFrom(array $prices): ?float
+    {
+        $baseTypeIds = [];
+        foreach ($this->gateway->listPriceTypes() as $type) {
+            if (!empty($type['base'])) {
+                $baseTypeIds[] = (string) $type['id'];
+            }
+        }
+        foreach ($prices as $typeId => $item) {
+            if (in_array((string) $typeId, $baseTypeIds, true)) {
+                return $item['price'];
+            }
+        }
+
+        return null;
+    }
+
+    /** Цена как строка для свойства типа «число»: 3500 → «3500», 90.5 → «90.5». */
+    private static function priceProperty(float $price): string
+    {
+        return rtrim(rtrim(number_format($price, 2, '.', ''), '0'), '.');
+    }
+
+    /** Совпадают ли значения свойства с числовой точностью (пустое значение равно только пустому). */
+    private function samePrice(mixed $actual, mixed $expected): bool
+    {
+        if ($actual === null || $actual === '' || $expected === null) {
+            return (string) $actual === (string) $expected;
+        }
+        if (!is_numeric($actual) || !is_numeric($expected)) {
+            return (string) $actual === (string) $expected;
+        }
+
+        return abs((float) $actual - (float) $expected) < 1e-9;
+    }
+
+    private function hasProperty(int $iblockId, string $code): bool
+    {
+        foreach ($this->gateway->getProperties($iblockId) as $property) {
+            if ($property['code'] === $code) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /** @return array<string,mixed> */
     private function sectionUpdate(array $args): array
     {
@@ -549,8 +630,7 @@ final class IblockToolset
     private function readableIblock(mixed $value): int
     {
         $id = $this->intArg($value, 'iblock_id');
-        $allowed = $this->settings->allowedIblocks();
-        if ($allowed !== [] && !in_array($id, $allowed, true)) {
+        if (!$this->settings->canReadIblock($id)) {
             throw new ToolException('Инфоблок ' . $id . ' недоступен: его нет в списке разрешённых.');
         }
         if ($this->gateway->getIblock($id) === null) {

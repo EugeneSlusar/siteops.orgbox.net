@@ -62,10 +62,41 @@ final class Settings
         return $this->store->get('token_hash', '');
     }
 
-    /** @return int[] пусто = все инфоблоки доступны для чтения; запись требует явного списка */
+    /** @return int[] список инфоблоков: для них разрешена запись, а при выключенном «чтении всех» — ещё и чтение */
     public function allowedIblocks(): array
     {
         return self::intList($this->store->get('allowed_iblocks', ''));
+    }
+
+    /**
+     * Читать все инфоблоки (true) или только перечисленные в списке (false).
+     * Явное значение Y/N задаёт галочка в настройках. Не задано (установки до появления галочки):
+     * как раньше, пустой список = читать все.
+     */
+    public function readAllIblocks(): bool
+    {
+        $value = $this->store->get('read_all_iblocks', '');
+        if ($value === 'Y' || $value === 'N') {
+            return $value === 'Y';
+        }
+
+        return $this->allowedIblocks() === [];
+    }
+
+    public function canReadIblock(int $id): bool
+    {
+        return $this->readAllIblocks() || in_array($id, $this->allowedIblocks(), true);
+    }
+
+    /** Что доступно клиенту, для страниц согласия: чтение и запись описываются отдельно. */
+    public function accessSummary(): string
+    {
+        $list = $this->allowedIblocks();
+        if ($this->readAllIblocks()) {
+            return 'все инфоблоки; запись ' . ($list === [] ? 'запрещена' : 'только в ' . implode(', ', $list));
+        }
+
+        return $list === [] ? 'ни один инфоблок (список пуст)' : 'только инфоблоки ' . implode(', ', $list);
     }
 
     /** @return string[] */

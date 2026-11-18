@@ -50,6 +50,37 @@ test('чтение: список разрешённых ограничивает
     assertSame([2], array_column(callTool($server, 'iblock_list', [])['data']['iblocks'], 'id'));
 });
 
+test('чтение: галочка «читать все» включена — список не ограничивает чтение, запись только в перечисленные', function (): void {
+    [$server] = toolsetServer(['read_all_iblocks' => 'Y', 'allowed_iblocks' => '2', 'mode' => 'readwrite']);
+    assertSame([1, 2], array_column(callTool($server, 'iblock_list', [])['data']['iblocks'], 'id'));
+    assertSame(false, callTool($server, 'element_list', ['iblock_id' => 1])['isError']);
+    $denied = callTool($server, 'cache_clear', ['scope' => 'iblock', 'iblock_id' => 1, 'dry_run' => true]);
+    assertTrue($denied['isError']);
+    assertContains('запрещена', $denied['text'], 'запись в инфоблок вне списка закрыта, хотя чтение открыто');
+    assertSame(false, callTool($server, 'cache_clear', ['scope' => 'iblock', 'iblock_id' => 2, 'dry_run' => true])['isError']);
+});
+
+test('чтение: галочка снята — доступны только перечисленные, остальные закрыты', function (): void {
+    [$server] = toolsetServer(['read_all_iblocks' => 'N', 'allowed_iblocks' => '2']);
+    assertSame([2], array_column(callTool($server, 'iblock_list', [])['data']['iblocks'], 'id'));
+    $r = callTool($server, 'element_list', ['iblock_id' => 1]);
+    assertTrue($r['isError']);
+    assertContains('недоступен', $r['text']);
+    assertSame(false, callTool($server, 'element_list', ['iblock_id' => 2])['isError']);
+});
+
+test('чтение: галочка снята и список пуст — не доступен ни один инфоблок', function (): void {
+    [$server] = toolsetServer(['read_all_iblocks' => 'N', 'allowed_iblocks' => '']);
+    assertSame([], callTool($server, 'iblock_list', [])['data']['iblocks']);
+    assertTrue(callTool($server, 'element_list', ['iblock_id' => 1])['isError']);
+});
+
+test('чтение: старые настройки без галочки работают как раньше (пустой список = все, список = только он)', function (): void {
+    assertTrue((new Settings(new ArrayOptionStore([])))->readAllIblocks());
+    assertTrue(!(new Settings(new ArrayOptionStore(['allowed_iblocks' => '2'])))->readAllIblocks());
+    assertTrue((new Settings(new ArrayOptionStore(['allowed_iblocks' => '2', 'read_all_iblocks' => 'Y'])))->canReadIblock(1));
+});
+
 test('чтение: недоступный инфоблок отклоняется', function (): void {
     [$server] = toolsetServer(['allowed_iblocks' => '2']);
     $r = callTool($server, 'element_list', ['iblock_id' => 1]);

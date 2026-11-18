@@ -197,25 +197,79 @@ test('товар: запись цены по коду типа, новой це�
     assertSame(false, $r['isError']);
     assertSame(true, $r['data']['updated']);
     assertSame(true, $r['data']['verified']);
-    assertSame(['PRICE_1', 'PRICE_2', 'QUANTITY', 'STORE_2'], array_keys($r['data']['changes']));
+    assertSame(['PRICE_1', 'PRICE_2', 'QUANTITY', 'STORE_2', 'PROP_MINIMUM_PRICE', 'PROP_MAXIMUM_PRICE'], array_keys($r['data']['changes']));
     assertSame(['price' => 100, 'currency' => 'RUB'], $r['data']['changes']['PRICE_1']['before']);
     assertSame(null, $r['data']['changes']['PRICE_2']['before']);
     assertSame(120.0, $gateway->products[10]['prices'][0]['price']);
     assertSame(12, callTool($server, 'product_get', ['id' => 10])['data']['quantity']);
     assertSame(7.0, $gateway->products[10]['stores'][2]['amount']);
+    assertSame('120', $gateway->elements[10]['properties']['MINIMUM_PRICE']);
+    assertSame('120', $gateway->elements[10]['properties']['MAXIMUM_PRICE']);
+    assertSame(1, count(array_filter($gateway->calls, static fn (string $c): bool => $c === 'setProperties:10')), 'свойства записаны одной операцией');
     assertSame('product.update', $audit->entries[count($audit->entries) - 1][0]);
 });
 
-test('товар: dry_run, совпадающие значения и невозможная запись', function () use ($rw): void {
+test('товар: базовая цена (голое число и объект) пишется в MINIMUM_PRICE и MAXIMUM_PRICE строкой', function () use ($rw): void {
     [$server, $gateway] = toolsetServer($rw);
-    assertSame(true, callTool($server, 'product_update', ['id' => 10, 'prices' => ['BASE' => 150], 'dry_run' => true])['data']['dry_run']);
+    $bare = callTool($server, 'product_update', ['id' => 10, 'prices' => ['BASE' => 3500]]);
+    assertSame(true, $bare['data']['verified']);
+    assertSame(3500.0, $gateway->products[10]['prices'][0]['price']);
+    assertSame('3500', $gateway->elements[10]['properties']['MINIMUM_PRICE']);
+    assertSame('3500', $gateway->elements[10]['properties']['MAXIMUM_PRICE']);
+
+    $object = callTool($server, 'product_update', ['id' => 10, 'prices' => ['BASE' => ['price' => 90.5, 'currency' => 'RUB']]]);
+    assertSame(true, $object['data']['verified']);
+    assertSame(90.5, $gateway->products[10]['prices'][0]['price']);
+    assertSame('90.5', $gateway->elements[10]['properties']['MINIMUM_PRICE']);
+    assertSame('90.5', $gateway->elements[10]['properties']['MAXIMUM_PRICE']);
+});
+
+test('товар: цена не базовая (OPT) свойства не трогает', function () use ($rw): void {
+    [$server, $gateway] = toolsetServer($rw);
+    $r = callTool($server, 'product_update', ['id' => 10, 'prices' => ['OPT' => 70]]);
+    assertSame(true, $r['data']['verified']);
+    assertSame(['PRICE_2'], array_keys($r['data']['changes']));
+    assertSame(false, isset($gateway->elements[10]['properties']['MINIMUM_PRICE']));
+});
+
+test('товар: без свойств MINIMUM_PRICE/MAXIMUM_PRICE базовая цена не пишется, отказ до записи', function () use ($rw): void {
+    [$server, $gateway] = toolsetServer($rw);
+    $gateway->hiddenProperties = ['MAXIMUM_PRICE'];
+    $calls = $gateway->calls;
+    $r = callTool($server, 'product_update', ['id' => 10, 'prices' => ['BASE' => 150]]);
+    assertTrue($r['isError'], 'нет свойства — ошибка');
+    assertContains('MAXIMUM_PRICE', $r['text']);
+    assertSame($calls, $gateway->calls);
     assertSame(100.0, $gateway->products[10]['prices'][0]['price']);
-    assertSame(false, callTool($server, 'product_update', ['id' => 10, 'prices' => ['BASE' => 100], 'quantity' => 5])['data']['updated']);
+});
+
+test('товар: базовая цена уже верна, а свойства расходятся — свойства исправляются', function () use ($rw): void {
+    [$server, $gateway] = toolsetServer($rw);
+    $gateway->elements[10]['properties']['MINIMUM_PRICE'] = '54000';
+    $gateway->elements[10]['properties']['MAXIMUM_PRICE'] = '100';
+    $r = callTool($server, 'product_update', ['id' => 10, 'prices' => ['BASE' => 100]]);
+    assertSame(true, $r['data']['updated']);
+    assertSame(['PROP_MINIMUM_PRICE'], array_keys($r['data']['changes']), 'MAXIMUM_PRICE уже верен, не трогается');
+    assertSame('100', $gateway->elements[10]['properties']['MINIMUM_PRICE']);
+    assertSame(true, $r['data']['verified']);
+    assertSame(false, callTool($server, 'product_update', ['id' => 10, 'prices' => ['BASE' => 100]])['data']['updated']);
+});
+
+test('товар: dry_run показывает свойства, совпадающие значения и невозможная запись', function () use ($rw): void {
+    [$server, $gateway] = toolsetServer($rw);
+    $dry = callTool($server, 'product_update', ['id' => 10, 'prices' => ['BASE' => 150], 'dry_run' => true]);
+    assertSame(true, $dry['data']['dry_run']);
+    assertSame(['PRICE_1', 'PROP_MINIMUM_PRICE', 'PROP_MAXIMUM_PRICE'], array_keys($dry['data']['changes']));
+    assertSame(100.0, $gateway->products[10]['prices'][0]['price']);
+    assertSame(false, isset($gateway->elements[10]['properties']['MINIMUM_PRICE']));
     $gateway->dropWrites = true;
     $r = callTool($server, 'product_update', ['id' => 10, 'quantity' => 1]);
     assertSame(false, $r['data']['verified']);
     assertSame(['QUANTITY'], $r['data']['not_applied']);
     assertSame(5, $r['data']['changes']['QUANTITY']['after']);
+    $r = callTool($server, 'product_update', ['id' => 10, 'prices' => ['BASE' => 150]]);
+    assertSame(false, $r['data']['verified']);
+    assertSame(['PRICE_1', 'PROP_MINIMUM_PRICE', 'PROP_MAXIMUM_PRICE'], $r['data']['not_applied']);
 });
 
 test('товар: проверка аргументов и прав', function () use ($rw): void {

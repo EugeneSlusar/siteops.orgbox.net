@@ -63,6 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$csrfPassed()) {
                 }
             }
             $store->set('mode', ($_POST['mode'] ?? '') === Settings::MODE_READWRITE ? Settings::MODE_READWRITE : Settings::MODE_READONLY);
+            $store->set('read_all_iblocks', isset($_POST['read_all_iblocks']) ? 'Y' : 'N');
             $store->set('allowed_iblocks', implode(',', Settings::intList((string) ($_POST['allowed_iblocks'] ?? ''))));
             $store->set('allowed_ips', implode(',', Settings::stringList((string) ($_POST['allowed_ips'] ?? ''))));
             $store->set('allowed_origins', implode(',', Settings::stringList((string) ($_POST['allowed_origins'] ?? ''))));
@@ -77,6 +78,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$csrfPassed()) {
             $expected = [
                 'mcp_enabled' => isset($_POST['mcp_enabled']) ? 'Y' : 'N',
                 'mode' => ($_POST['mode'] ?? '') === Settings::MODE_READWRITE ? Settings::MODE_READWRITE : Settings::MODE_READONLY,
+                'read_all_iblocks' => isset($_POST['read_all_iblocks']) ? 'Y' : 'N',
                 'allowed_iblocks' => implode(',', Settings::intList((string) ($_POST['allowed_iblocks'] ?? ''))),
             ];
             if ($siteops->oauthAvailable()) {
@@ -94,7 +96,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$csrfPassed()) {
             } else {
                 $messages[] = ['OK', 'Настройки сохранены и проверены чтением. MCP: ' . ($expected['mcp_enabled'] === 'Y' ? 'включён' : 'выключен')
                     . ($siteops->oauthAvailable() ? '; подключение по ссылке: ' . ($expected['oauth_enabled'] === 'Y' ? 'включено' : 'выключено') : '')
-                    . '; режим: ' . ($expected['mode'] === Settings::MODE_READWRITE ? 'чтение и запись' : 'только чтение') . '.'];
+                    . '; режим: ' . ($expected['mode'] === Settings::MODE_READWRITE ? 'чтение и запись' : 'только чтение')
+                    . '; чтение инфоблоков: ' . ($expected['read_all_iblocks'] === 'Y' ? 'все' : 'только перечисленные') . '.'];
             }
         } elseif ($action === 'token') {
             $newToken = $settings->generateToken();
@@ -199,7 +202,8 @@ $action = $APPLICATION->GetCurPageParam('', [], false);
             <label><input type="radio" name="mode" value="readonly"<?=!$settings->writesEnabled() ? ' checked' : ''?>> только чтение (рекомендуется)</label><br>
             <label><input type="radio" name="mode" value="readwrite"<?=$settings->writesEnabled() ? ' checked' : ''?>> чтение и запись (удаления нет; изменения пишутся в журнал событий)</label>
         </td></tr>
-        <tr><td>ID инфоблоков:</td><td><input type="text" name="allowed_iblocks" size="40" value="<?=$h(implode(', ', $settings->allowedIblocks()))?>"><br><small>Через запятую. Пусто — чтение всех инфоблоков. <b>Запись разрешена только для перечисленных.</b></small></td></tr>
+        <tr><td>Чтение инфоблоков:</td><td><label><input type="checkbox" name="read_all_iblocks" value="Y"<?=$settings->readAllIblocks() ? ' checked' : ''?>> разрешить доступ на чтение ко всем инфоблокам</label><br><small>Галочка снята — читать можно только инфоблоки из списка ниже (при пустом списке не доступен ни один).</small></td></tr>
+        <tr><td>ID инфоблоков:</td><td><input type="text" name="allowed_iblocks" size="40" value="<?=$h(implode(', ', $settings->allowedIblocks()))?>"><br><small>Через запятую. Это список «указанных» инфоблоков: при снятой галочке выше он ограничивает чтение. <b>Запись разрешена только для перечисленных</b> при любом положении галочки.</small></td></tr>
         <tr><td>Разрешённые IP:</td><td><input type="text" name="allowed_ips" size="40" value="<?=$h(implode(', ', $settings->allowedIps()))?>"><br><small>Пусто — любые. Если сайт за прокси или CDN, проверка по IP работать не будет.</small></td></tr>
         <tr><td>Разрешённые Origin:</td><td><input type="text" name="allowed_origins" size="40" value="<?=$h(implode(', ', $settings->allowedOrigins()))?>"><br><small>Для браузерных клиентов; обычным клиентам MCP не нужны. Пусто — запросы с Origin отклоняются.</small></td></tr>
         <tr><td>Запросов в минуту с IP:</td><td><input type="number" name="rate_limit" min="1" max="1000" value="<?=(int) $settings->rateLimitPerMinute()?>"></td></tr>
