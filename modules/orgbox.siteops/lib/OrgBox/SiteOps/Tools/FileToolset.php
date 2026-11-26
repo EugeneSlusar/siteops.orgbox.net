@@ -116,11 +116,8 @@ final class FileToolset
                 throw new ToolException('Этот путь недоступен.');
             }
         }
-        if (strtolower($parts[0]) === 'local' && isset($parts[1]) && strtolower($parts[1]) === 'php_interface') {
-            throw new ToolException('Этот служебный путь недоступен.');
-        }
-        if (strtolower($parts[0]) === 'bitrix' && (!$forRead || !$this->isMaxmaReadPath($parts))) {
-            throw new ToolException('Этот служебный путь недоступен.');
+        if (!$forRead && in_array(strtolower($parts[0]), ['bitrix', 'local'], true)) {
+            throw new ToolException('Переименование файлов в этом каталоге запрещено.');
         }
         $name = strtolower(end($parts) ?: '');
         foreach (self::BLOCKED_NAMES as $blocked) {
@@ -137,15 +134,6 @@ final class FileToolset
         }
 
         return implode('/', $parts);
-    }
-
-    /** Разрешены только исходники двух конкретных интеграций Maxma, только для чтения. */
-    private function isMaxmaReadPath(array $parts): bool
-    {
-        $path = strtolower(implode('/', $parts));
-
-        return str_starts_with($path, 'bitrix/components/maxma/')
-            || str_starts_with($path, 'bitrix/modules/maxma.loyalty/');
     }
 
     private function existingFile(string $relative): string

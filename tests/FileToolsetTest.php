@@ -14,10 +14,12 @@ function fileToolsetFixture(): array
     mkdir($root . '/catalog', 0700, true);
     mkdir($root . '/bitrix/components/maxma/basket.bonus', 0700, true);
     mkdir($root . '/bitrix/modules/maxma.loyalty/install/components/maxma/basket.bonus', 0700, true);
+    mkdir($root . '/local/modules/maxma.loyalty', 0700, true);
     file_put_contents($root . '/help/warranty/index.php', "<?php\n// warranty\nreturn true;\n");
     file_put_contents($root . '/catalog/index.php', implode("\n", array_map(static fn (int $i): string => 'line ' . $i, range(1, 80))));
     file_put_contents($root . '/bitrix/components/maxma/basket.bonus/class.php', "<?php\n// component\n");
     file_put_contents($root . '/bitrix/modules/maxma.loyalty/install/components/maxma/basket.bonus/class.php', "<?php\n// module\n");
+    file_put_contents($root . '/local/modules/maxma.loyalty/include.php', "<?php\n// local module\n");
     $audit = new MemoryAudit();
     $registry = new ToolRegistry();
     (new FileToolset($root, $audit))->registerAll($registry);
@@ -66,13 +68,14 @@ test('файлы: запрещённые пути, скрытые файлы и 
     }
 });
 
-test('файлы: file_read допускает только два дерева Maxma внутри bitrix', function (): void {
+test('файлы: file_read читает обычные текстовые файлы в bitrix и local', function (): void {
     [$root, $registry] = fileToolsetFixture();
     try {
         $read = $registry->find('file_read', false);
         assertContains('component', $read->call(['path' => 'bitrix/components/maxma/basket.bonus/class.php'])['content']);
         assertContains('module', $read->call(['path' => 'bitrix/modules/maxma.loyalty/install/components/maxma/basket.bonus/class.php'])['content']);
-        foreach (['bitrix/.settings.php', 'bitrix/modules/main/include.php'] as $path) {
+        assertContains('local module', $read->call(['path' => 'local/modules/maxma.loyalty/include.php'])['content']);
+        foreach (['bitrix/.settings.php', 'local/php_interface/dbconn.php'] as $path) {
             try {
                 $read->call(['path' => $path]);
                 throw new RuntimeException('Ожидался отказ: ' . $path);
@@ -102,6 +105,11 @@ test('файлы: file_rename перемещает один файл без пе
         try {
             $rename->call(['from' => 'bitrix/components/maxma/basket.bonus/class.php', 'to' => 'bitrix/components/maxma/basket.bonus/class.php.bak']);
             throw new RuntimeException('Ожидался отказ пути bitrix.');
+        } catch (ToolException) {
+        }
+        try {
+            $rename->call(['from' => 'local/modules/maxma.loyalty/include.php', 'to' => 'local/modules/maxma.loyalty/include.php.bak']);
+            throw new RuntimeException('Ожидался отказ пути local.');
         } catch (ToolException) {
         }
         assertSame('file.rename', $audit->entries[1][0]);
