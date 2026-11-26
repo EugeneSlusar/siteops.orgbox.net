@@ -15,7 +15,7 @@ use OrgBox\SiteOps\OAuth\OAuthServer;
  */
 final class OAuthEndpoint
 {
-    public const ROUTES = ['as-metadata', 'resource-metadata', 'register', 'device', 'token', 'revoke'];
+    public const ROUTES = ['as-metadata', 'oidc-configuration', 'jwks', 'resource-metadata', 'register', 'device', 'token', 'revoke'];
 
     public function __construct(
         private Settings $settings,
@@ -44,7 +44,7 @@ final class OAuthEndpoint
             return new HttpResponse(204, null, $headers);
         }
 
-        $isMetadata = str_ends_with($route, 'metadata');
+        $isMetadata = in_array($route, ['as-metadata', 'oidc-configuration', 'jwks', 'resource-metadata'], true);
         if ($isMetadata ? $method !== 'GET' : $method !== 'POST') {
             return HttpResponse::json(405, ['error' => 'method_not_allowed'], $headers + ['Allow' => $isMetadata ? 'GET, OPTIONS' : 'POST, OPTIONS']);
         }
@@ -54,6 +54,8 @@ final class OAuthEndpoint
 
             return match ($route) {
                 'as-metadata' => HttpResponse::json(200, $this->oauth->authorizationServerMetadata(), ['Cache-Control' => 'public, max-age=300'] + $headers),
+                'oidc-configuration' => HttpResponse::json(200, $this->oauth->openidConfiguration(), ['Cache-Control' => 'public, max-age=300'] + $headers),
+                'jwks' => HttpResponse::json(200, $this->oauth->jwkSet(), ['Cache-Control' => 'public, max-age=300'] + $headers),
                 'resource-metadata' => HttpResponse::json(200, $this->oauth->protectedResourceMetadata(), ['Cache-Control' => 'public, max-age=300'] + $headers),
                 'register' => $this->register($server, $rawBody, $headers),
                 'device' => HttpResponse::json(200, $this->oauth->startDevice($this->form($rawBody), (string) ($server['REMOTE_ADDR'] ?? '')), $headers),

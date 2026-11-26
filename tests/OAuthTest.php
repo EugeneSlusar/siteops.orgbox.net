@@ -65,6 +65,17 @@ test('OAuth: документ сервера авторизации — толь
     assertTrue(str_ends_with($m['token_endpoint'], '/'), 'адреса со слэшем: без редиректа Apache при POST');
 });
 
+test('OAuth: OpenID Connect discovery содержит обязательные для клиентов MCP поля и JWK Set', function (): void {
+    [$oauth] = oauthFixture();
+    $discovery = $oauth->openidConfiguration();
+    assertSame(OAUTH_BASE . '/site.ops/oauth/jwks/', $discovery['jwks_uri']);
+    assertSame(['public'], $discovery['subject_types_supported']);
+    assertSame(['RS256'], $discovery['id_token_signing_alg_values_supported']);
+    $jwks = $oauth->jwkSet();
+    assertSame('RSA', $jwks['keys'][0]['kty']);
+    assertSame('AQAB', $jwks['keys'][0]['e']);
+});
+
 test('OAuth: документ защищаемого ресурса указывает на MCP-адрес и сервер авторизации', function (): void {
     [$oauth] = oauthFixture();
     $m = $oauth->protectedResourceMetadata();
@@ -350,6 +361,9 @@ test('HTTP: документы обнаружения отдаются по GET 
     assertSame('*', $r->headers['Access-Control-Allow-Origin']);
     assertSame(OAUTH_BASE . '/site.ops/oauth', json_decode((string) $r->body, true)['issuer']);
     assertSame(405, $http->handle('as-metadata', 'POST', $srv, '')->status);
+    $oidc = json_decode((string) $http->handle('oidc-configuration', 'GET', $srv, '')->body, true);
+    assertSame(OAUTH_BASE . '/site.ops/oauth/jwks/', $oidc['jwks_uri']);
+    assertSame(200, $http->handle('jwks', 'GET', $srv, '')->status);
     assertSame(405, $http->handle('token', 'GET', $srv, '')->status);
     assertSame(204, $http->handle('token', 'OPTIONS', $srv, '')->status);
 });

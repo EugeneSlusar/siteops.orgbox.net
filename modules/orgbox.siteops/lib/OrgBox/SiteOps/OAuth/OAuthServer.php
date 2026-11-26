@@ -75,6 +75,40 @@ final class OAuthServer
         ];
     }
 
+    /**
+     * OpenID Connect Discovery 1.0.
+     *
+     * SiteOps uses OAuth access tokens rather than ID tokens, but a number of MCP
+     * clients discover an authorization server exclusively through this document
+     * and validate the required OIDC members before beginning the OAuth flow.
+     *
+     * @return array<string,mixed>
+     */
+    public function openidConfiguration(): array
+    {
+        return $this->authorizationServerMetadata() + [
+            'jwks_uri' => $this->issuer() . '/jwks/',
+            'subject_types_supported' => ['public'],
+            'id_token_signing_alg_values_supported' => ['RS256'],
+        ];
+    }
+
+    /** @return array{keys:list<array<string,string>>} */
+    public function jwkSet(): array
+    {
+        // Публичный ключ публикуется только для OIDC discovery. OAuth-токены
+        // SiteOps непрозрачные и сверяются с хранилищем, поэтому этот ключ не
+        // участвует в проверке bearer-токенов.
+        return ['keys' => [[
+            'kty' => 'RSA',
+            'use' => 'sig',
+            'kid' => 'siteops-oidc-2026-11',
+            'alg' => 'RS256',
+            'n' => 'mgo29exZlIw2V9HYNH8jyR7i86m4oiVgHD6oXet47xnaplTU7GthLYmX744I74KTT_10hqKmTqmM487ANyLE-hTgsPH4V3VtBimItz2rt_Jih1VYIV1KGAeZT8porp0H5cMvLnhisFhoaS9oLiSb2utwnRBVsslQiHRHKFbCj-dqeINZS9ghuDx0nBU_dvCku5rdnpBfJvqe_VP-64k27n9hbot_cRxdpPvROO2HBBFyTo_UFB5ROWg2uxdt8hXOhgAdDrDDP5_331t5mXbsvxWOisaheL8XIrhb7EjlS-p_gNxftc9O-lAwgZIYXguLj-oLCy10-cNzl53w9nUhvQ',
+            'e' => 'AQAB',
+        ]]];
+    }
+
     /** @return array<string,mixed> */
     public function protectedResourceMetadata(): array
     {

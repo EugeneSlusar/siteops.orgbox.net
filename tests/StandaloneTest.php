@@ -135,7 +135,8 @@ test('сборка: site.ops содержит точки входа, .htaccess, 
             $names[] = $zip->getNameIndex($i);
         }
         foreach (['mcp/index.php', 'admin/index.php', 'oauth/authorize/index.php', 'oauth/token/index.php', 'oauth/register/index.php', 'oauth/revoke/index.php',
-            'oauth/.well-known/oauth-authorization-server/index.php', 'oauth/.well-known/openid-configuration/index.php', 'oauth/.well-known/oauth-protected-resource/index.php',
+             'oauth/.well-known/oauth-authorization-server/index.php', 'oauth/.well-known/openid-configuration/index.php', 'oauth/.well-known/oauth-protected-resource/index.php',
+             'oauth/jwks/index.php',
             '.htaccess', 'mcp/.htaccess', 'oauth/.htaccess', 'autoload.php', 'version.php', 'lib/OrgBox/SiteOps/Bootstrap.php', 'lib/OrgBox/SiteOps/Admin/settings.view.php', 'lib/OrgBox/SiteOps/Admin/authorize.view.php'] as $file) {
             assertTrue(in_array('site.ops/' . $file, $names, true), $file);
         }

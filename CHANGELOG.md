@@ -1,5 +1,10 @@
 # История изменений
 
+## 0.10.2 — 2026-11-26
+
+- **Совместимость с OpenCode MCP OAuth:** `/.well-known/openid-configuration` теперь возвращает обязательные для OIDC Discovery поля `jwks_uri`, `subject_types_supported` и `id_token_signing_alg_values_supported`.
+- Добавлен публичный JWK Set: `https://ваш-сайт/site.ops/oauth/jwks/`. Документы discovery и JWK Set доступны по CORS и не требуют сессии Битрикс.
+
 ## 0.10.0 — 2026-11-18
 
 - **Новое: переключатель «Разрешить доступ на чтение ко всем инфоблокам»** в настройках.
