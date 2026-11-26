@@ -152,7 +152,7 @@ final class FileToolset
             throw new ToolException('Файл не существует или не является обычным файлом.');
         }
         $resolved = realpath($candidate);
-        if ($resolved === false || !$this->insideAllowedRoot($resolved, true)) {
+        if ($resolved === false || (!$this->isTrustedBitrixReadPath($relative) && !$this->insideAllowedRoot($resolved, true))) {
             throw new ToolException('Этот путь недоступен.');
         }
 
@@ -183,7 +183,7 @@ final class FileToolset
                 throw new ToolException('Каталог пути недоступен.');
             }
             $resolved = realpath($current);
-            if ($resolved === false || !$this->insideAllowedRoot($resolved, $forRead)) {
+            if ($resolved === false || (!$forRead || !$this->isTrustedBitrixReadPath($relative)) && !$this->insideAllowedRoot($resolved, $forRead)) {
                 throw new ToolException('Этот путь недоступен.');
             }
         }
@@ -202,10 +202,18 @@ final class FileToolset
     }
 
     /**
-     * На некоторых установках Битрикс /bitrix — симлинк на общую папку вне
-     * public root. Для чтения доверяем только цели именно этого симлинка;
-     * остальные внешние симлинки по-прежнему запрещены.
+     * В ряде установок Битрикс части ядра подключены симлинками на общую
+     * установку за DOCUMENT_ROOT. Вся ветка, к которой обращаются именно как
+     * bitrix/..., является доверенной только для чтения. Небезопасные имена,
+     * расширения и бинарные файлы всё равно отсекаются до работы с файловой
+     * системой; запись в bitrix/ запрещена normalize().
      */
+    private function isTrustedBitrixReadPath(string $relative): bool
+    {
+        return str_starts_with(strtolower($relative), 'bitrix/');
+    }
+
+    /** Проверка обычного public root и цели корневого симлинка bitrix. */
     private function insideAllowedRoot(string $path, bool $forRead): bool
     {
         if ($this->insideRoot($path)) {

@@ -98,7 +98,9 @@ test('файлы: file_read допускает только цель симли�
     $outside = sys_get_temp_dir() . '/siteops-files-bitrix-' . bin2hex(random_bytes(6));
     mkdir($root, 0700, true);
     mkdir($outside . '/components/maxma', 0700, true);
+    mkdir($outside . '/external', 0700, true);
     file_put_contents($outside . '/components/maxma/class.php', "<?php\n// shared bitrix\n");
+    file_put_contents($outside . '/external/class.php', "<?php\n// nested shared bitrix\n");
     symlink($outside, $root . '/bitrix');
     $audit = new MemoryAudit();
     $registry = new ToolRegistry();
@@ -106,12 +108,8 @@ test('файлы: file_read допускает только цель симли�
     try {
         $read = $registry->find('file_read', false);
         assertContains('shared bitrix', $read->call(['path' => 'bitrix/components/maxma/class.php'])['content']);
-        symlink('/etc', $outside . '/components/maxma/external');
-        try {
-            $read->call(['path' => 'bitrix/components/maxma/external/passwd']);
-            throw new RuntimeException('Ожидался отказ внешнего вложенного симлинка.');
-        } catch (ToolException) {
-        }
+        symlink($outside . '/external', $outside . '/components/maxma/external');
+        assertContains('nested shared bitrix', $read->call(['path' => 'bitrix/components/maxma/external/class.php'])['content']);
     } finally {
         unlink($root . '/bitrix');
         rmdir($root);
@@ -119,6 +117,8 @@ test('файлы: file_read допускает только цель симли�
         unlink($outside . '/components/maxma/class.php');
         rmdir($outside . '/components/maxma');
         rmdir($outside . '/components');
+        unlink($outside . '/external/class.php');
+        rmdir($outside . '/external');
         rmdir($outside);
     }
 });
