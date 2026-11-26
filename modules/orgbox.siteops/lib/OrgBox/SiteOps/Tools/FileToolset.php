@@ -110,9 +110,9 @@ final class FileToolset
             throw new ToolException('Нужен допустимый относительный путь внутри публичного корня.');
         }
         $parts = explode('/', $path);
-        foreach ($parts as $part) {
+        foreach ($parts as $index => $part) {
             $lower = strtolower($part);
-            if ($part === '' || $part === '.' || $part === '..' || str_starts_with($part, '.') || in_array($lower, self::BLOCKED_DIRECTORIES, true)) {
+            if ($part === '' || $part === '.' || $part === '..' || (!$this->allowedReadDotSegment($parts, $index, $forRead) && str_starts_with($part, '.')) || in_array($lower, self::BLOCKED_DIRECTORIES, true)) {
                 throw new ToolException('Этот путь недоступен.');
             }
         }
@@ -136,10 +136,19 @@ final class FileToolset
         return implode('/', $parts);
     }
 
+    /** .default — штатное имя каталога шаблона; оно допустимо только при чтении из bitrix/local. */
+    private function allowedReadDotSegment(array $parts, int $index, bool $forRead): bool
+    {
+        return $forRead
+            && $index > 0
+            && $parts[$index] === '.default'
+            && in_array(strtolower($parts[0]), ['bitrix', 'local'], true);
+    }
+
     private function existingFile(string $relative): string
     {
         $candidate = $this->safePath($relative);
-        if (!file_exists($candidate) || is_link($candidate) || !is_file($candidate)) {
+        if (!file_exists($candidate) || !is_file($candidate)) {
             throw new ToolException('Файл не существует или не является обычным файлом.');
         }
         $resolved = realpath($candidate);
@@ -170,8 +179,12 @@ final class FileToolset
         $parts = explode('/', $relative);
         foreach (array_slice($parts, 0, -1) as $part) {
             $current .= '/' . $part;
-            if (!is_dir($current) || is_link($current)) {
+            if (!is_dir($current)) {
                 throw new ToolException('Каталог пути недоступен.');
+            }
+            $resolved = realpath($current);
+            if ($resolved === false || !$this->insideRoot($resolved)) {
+                throw new ToolException('Этот путь недоступен.');
             }
         }
         if (!$this->insideRoot($current)) {

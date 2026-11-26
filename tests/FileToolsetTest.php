@@ -15,11 +15,15 @@ function fileToolsetFixture(): array
     mkdir($root . '/bitrix/components/maxma/basket.bonus', 0700, true);
     mkdir($root . '/bitrix/modules/maxma.loyalty/install/components/maxma/basket.bonus', 0700, true);
     mkdir($root . '/local/modules/maxma.loyalty', 0700, true);
+    mkdir($root . '/bitrix/templates/store/.default', 0700, true);
+    mkdir($root . '/local/templates/store/.default', 0700, true);
     file_put_contents($root . '/help/warranty/index.php', "<?php\n// warranty\nreturn true;\n");
     file_put_contents($root . '/catalog/index.php', implode("\n", array_map(static fn (int $i): string => 'line ' . $i, range(1, 80))));
     file_put_contents($root . '/bitrix/components/maxma/basket.bonus/class.php', "<?php\n// component\n");
     file_put_contents($root . '/bitrix/modules/maxma.loyalty/install/components/maxma/basket.bonus/class.php', "<?php\n// module\n");
     file_put_contents($root . '/local/modules/maxma.loyalty/include.php', "<?php\n// local module\n");
+    file_put_contents($root . '/bitrix/templates/store/.default/template.php', "<?php\n// bitrix template\n");
+    file_put_contents($root . '/local/templates/store/.default/template.php', "<?php\n// local template\n");
     $audit = new MemoryAudit();
     $registry = new ToolRegistry();
     (new FileToolset($root, $audit))->registerAll($registry);
@@ -75,6 +79,8 @@ test('файлы: file_read читает обычные текстовые фа�
         assertContains('component', $read->call(['path' => 'bitrix/components/maxma/basket.bonus/class.php'])['content']);
         assertContains('module', $read->call(['path' => 'bitrix/modules/maxma.loyalty/install/components/maxma/basket.bonus/class.php'])['content']);
         assertContains('local module', $read->call(['path' => 'local/modules/maxma.loyalty/include.php'])['content']);
+        assertContains('bitrix template', $read->call(['path' => 'bitrix/templates/store/.default/template.php'])['content']);
+        assertContains('local template', $read->call(['path' => 'local/templates/store/.default/template.php'])['content']);
         foreach (['bitrix/.settings.php', 'local/php_interface/dbconn.php'] as $path) {
             try {
                 $read->call(['path' => $path]);
