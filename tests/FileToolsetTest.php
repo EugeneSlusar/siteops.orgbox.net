@@ -93,6 +93,36 @@ test('файлы: file_read читает обычные текстовые фа�
     }
 });
 
+test('файлы: file_read допускает только цель симлинка public-root/bitrix', function (): void {
+    $root = sys_get_temp_dir() . '/siteops-files-root-' . bin2hex(random_bytes(6));
+    $outside = sys_get_temp_dir() . '/siteops-files-bitrix-' . bin2hex(random_bytes(6));
+    mkdir($root, 0700, true);
+    mkdir($outside . '/components/maxma', 0700, true);
+    file_put_contents($outside . '/components/maxma/class.php', "<?php\n// shared bitrix\n");
+    symlink($outside, $root . '/bitrix');
+    $audit = new MemoryAudit();
+    $registry = new ToolRegistry();
+    (new FileToolset($root, $audit))->registerAll($registry);
+    try {
+        $read = $registry->find('file_read', false);
+        assertContains('shared bitrix', $read->call(['path' => 'bitrix/components/maxma/class.php'])['content']);
+        symlink('/etc', $outside . '/components/maxma/external');
+        try {
+            $read->call(['path' => 'bitrix/components/maxma/external/passwd']);
+            throw new RuntimeException('Ожидался отказ внешнего вложенного симлинка.');
+        } catch (ToolException) {
+        }
+    } finally {
+        unlink($root . '/bitrix');
+        rmdir($root);
+        unlink($outside . '/components/maxma/external');
+        unlink($outside . '/components/maxma/class.php');
+        rmdir($outside . '/components/maxma');
+        rmdir($outside . '/components');
+        rmdir($outside);
+    }
+});
+
 test('файлы: file_rename перемещает один файл без перезаписи и проверяет результат', function (): void {
     [$root, $registry, $audit] = fileToolsetFixture();
     try {

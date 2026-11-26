@@ -147,12 +147,12 @@ final class FileToolset
 
     private function existingFile(string $relative): string
     {
-        $candidate = $this->safePath($relative);
+        $candidate = $this->safePath($relative, true);
         if (!file_exists($candidate) || !is_file($candidate)) {
             throw new ToolException('Файл не существует или не является обычным файлом.');
         }
         $resolved = realpath($candidate);
-        if ($resolved === false || !$this->insideRoot($resolved)) {
+        if ($resolved === false || !$this->insideAllowedRoot($resolved, true)) {
             throw new ToolException('Этот путь недоступен.');
         }
 
@@ -161,7 +161,7 @@ final class FileToolset
 
     private function newFilePath(string $relative): string
     {
-        $candidate = $this->safePath($relative);
+        $candidate = $this->safePath($relative, false);
         if (file_exists($candidate) || is_link($candidate)) {
             throw new ToolException('Целевой файл уже существует.');
         }
@@ -169,7 +169,7 @@ final class FileToolset
         return $candidate;
     }
 
-    private function safePath(string $relative): string
+    private function safePath(string $relative, bool $forRead): string
     {
         $root = realpath($this->publicRoot);
         if ($root === false || !is_dir($root)) {
@@ -183,7 +183,7 @@ final class FileToolset
                 throw new ToolException('Каталог пути недоступен.');
             }
             $resolved = realpath($current);
-            if ($resolved === false || !$this->insideRoot($resolved)) {
+            if ($resolved === false || !$this->insideAllowedRoot($resolved, $forRead)) {
                 throw new ToolException('Этот путь недоступен.');
             }
         }
@@ -199,6 +199,25 @@ final class FileToolset
         $root = realpath($this->publicRoot);
 
         return $root !== false && ($path === $root || str_starts_with($path, $root . '/'));
+    }
+
+    /**
+     * На некоторых установках Битрикс /bitrix — симлинк на общую папку вне
+     * public root. Для чтения доверяем только цели именно этого симлинка;
+     * остальные внешние симлинки по-прежнему запрещены.
+     */
+    private function insideAllowedRoot(string $path, bool $forRead): bool
+    {
+        if ($this->insideRoot($path)) {
+            return true;
+        }
+        if (!$forRead) {
+            return false;
+        }
+        $root = realpath($this->publicRoot);
+        $bitrix = $root === false ? false : realpath($root . '/bitrix');
+
+        return $bitrix !== false && ($path === $bitrix || str_starts_with($path, $bitrix . '/'));
     }
 
     private function positiveInt(array $args, string $key, int $default, int $max): int
