@@ -15,7 +15,7 @@ final class FileToolset
     private const MAX_LIMIT = 2000;
     private const MAX_BYTES = 5_000_000;
     private const EXTENSIONS = ['php', 'html', 'htm', 'css', 'js', 'json', 'xml', 'txt', 'md', 'csv', 'yml', 'yaml'];
-    private const BLOCKED_DIRECTORIES = ['bitrix', 'upload', 'backup', 'backups', 'log', 'logs', 'cache', 'caches', 'session', 'sessions', 'tmp', 'temp'];
+    private const BLOCKED_DIRECTORIES = ['upload', 'backup', 'backups', 'log', 'logs', 'cache', 'caches', 'session', 'sessions', 'tmp', 'temp'];
     private const BLOCKED_NAMES = ['password', 'secret', 'token', 'credential', 'config', 'dbconn'];
 
     public function __construct(private string $publicRoot, private AuditLogger $audit)
@@ -47,7 +47,7 @@ final class FileToolset
         $id = $this->callId();
         $path = is_string($args['path'] ?? null) ? $args['path'] : '';
         try {
-            $relative = $this->normalize($path);
+            $relative = $this->normalize($path, true);
             $file = $this->existingFile($relative);
             $offset = $this->positiveInt($args, 'offset', 1, PHP_INT_MAX);
             $limit = $this->positiveInt($args, 'limit', 200, self::MAX_LIMIT);
@@ -81,8 +81,8 @@ final class FileToolset
         $from = is_string($args['from'] ?? null) ? $args['from'] : '';
         $to = is_string($args['to'] ?? null) ? $args['to'] : '';
         try {
-            $sourcePath = $this->normalize($from);
-            $targetPath = $this->normalize($to);
+            $sourcePath = $this->normalize($from, false);
+            $targetPath = $this->normalize($to, false);
             $source = $this->existingFile($sourcePath);
             $target = $this->newFilePath($targetPath);
             $size = filesize($source);
@@ -104,7 +104,7 @@ final class FileToolset
         }
     }
 
-    private function normalize(string $path): string
+    private function normalize(string $path, bool $forRead): string
     {
         if ($path === '' || strlen($path) > 1000 || str_contains($path, "\0") || str_starts_with($path, '/') || str_contains($path, '\\')) {
             throw new ToolException('Нужен допустимый относительный путь внутри публичного корня.');
@@ -115,6 +115,12 @@ final class FileToolset
             if ($part === '' || $part === '.' || $part === '..' || str_starts_with($part, '.') || in_array($lower, self::BLOCKED_DIRECTORIES, true)) {
                 throw new ToolException('Этот путь недоступен.');
             }
+        }
+        if (strtolower($parts[0]) === 'local' && isset($parts[1]) && strtolower($parts[1]) === 'php_interface') {
+            throw new ToolException('Этот служебный путь недоступен.');
+        }
+        if (strtolower($parts[0]) === 'bitrix' && (!$forRead || !$this->isMaxmaReadPath($parts))) {
+            throw new ToolException('Этот служебный путь недоступен.');
         }
         $name = strtolower(end($parts) ?: '');
         foreach (self::BLOCKED_NAMES as $blocked) {
@@ -131,6 +137,15 @@ final class FileToolset
         }
 
         return implode('/', $parts);
+    }
+
+    /** Разрешены только исходники двух конкретных интеграций Maxma, только для чтения. */
+    private function isMaxmaReadPath(array $parts): bool
+    {
+        $path = strtolower(implode('/', $parts));
+
+        return str_starts_with($path, 'bitrix/components/maxma/')
+            || str_starts_with($path, 'bitrix/modules/maxma.loyalty/');
     }
 
     private function existingFile(string $relative): string

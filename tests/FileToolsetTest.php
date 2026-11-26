@@ -12,8 +12,12 @@ function fileToolsetFixture(): array
     $root = sys_get_temp_dir() . '/siteops-files-' . bin2hex(random_bytes(6));
     mkdir($root . '/help/warranty', 0700, true);
     mkdir($root . '/catalog', 0700, true);
+    mkdir($root . '/bitrix/components/maxma/basket.bonus', 0700, true);
+    mkdir($root . '/bitrix/modules/maxma.loyalty/install/components/maxma/basket.bonus', 0700, true);
     file_put_contents($root . '/help/warranty/index.php', "<?php\n// warranty\nreturn true;\n");
     file_put_contents($root . '/catalog/index.php', implode("\n", array_map(static fn (int $i): string => 'line ' . $i, range(1, 80))));
+    file_put_contents($root . '/bitrix/components/maxma/basket.bonus/class.php', "<?php\n// component\n");
+    file_put_contents($root . '/bitrix/modules/maxma.loyalty/install/components/maxma/basket.bonus/class.php', "<?php\n// module\n");
     $audit = new MemoryAudit();
     $registry = new ToolRegistry();
     (new FileToolset($root, $audit))->registerAll($registry);
@@ -62,6 +66,24 @@ test('файлы: запрещённые пути, скрытые файлы и 
     }
 });
 
+test('файлы: file_read допускает только два дерева Maxma внутри bitrix', function (): void {
+    [$root, $registry] = fileToolsetFixture();
+    try {
+        $read = $registry->find('file_read', false);
+        assertContains('component', $read->call(['path' => 'bitrix/components/maxma/basket.bonus/class.php'])['content']);
+        assertContains('module', $read->call(['path' => 'bitrix/modules/maxma.loyalty/install/components/maxma/basket.bonus/class.php'])['content']);
+        foreach (['bitrix/.settings.php', 'bitrix/modules/main/include.php'] as $path) {
+            try {
+                $read->call(['path' => $path]);
+                throw new RuntimeException('Ожидался отказ: ' . $path);
+            } catch (ToolException) {
+            }
+        }
+    } finally {
+        removeFileToolsetFixture($root);
+    }
+});
+
 test('файлы: file_rename перемещает один файл без перезаписи и проверяет результат', function (): void {
     [$root, $registry, $audit] = fileToolsetFixture();
     try {
@@ -75,6 +97,11 @@ test('файлы: file_rename перемещает один файл без пе
         try {
             $rename->call(['from' => 'help/warranty/index.php.bak', 'to' => '.backup/index.php']);
             throw new RuntimeException('Ожидался отказ скрытой цели.');
+        } catch (ToolException) {
+        }
+        try {
+            $rename->call(['from' => 'bitrix/components/maxma/basket.bonus/class.php', 'to' => 'bitrix/components/maxma/basket.bonus/class.php.bak']);
+            throw new RuntimeException('Ожидался отказ пути bitrix.');
         } catch (ToolException) {
         }
         assertSame('file.rename', $audit->entries[1][0]);
