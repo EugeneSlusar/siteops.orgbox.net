@@ -24,6 +24,8 @@ use OrgBox\SiteOps\OAuth\OAuthServer;
 use OrgBox\SiteOps\OAuth\OAuthStore;
 use OrgBox\SiteOps\Tools\IblockToolset;
 use OrgBox\SiteOps\Tools\FileToolset;
+use OrgBox\SiteOps\Tools\DeliveryToolset;
+use OrgBox\SiteOps\Delivery\BitrixDeliveryGateway;
 use OrgBox\SiteOps\Update\CurlHttpClient;
 use OrgBox\SiteOps\Update\HttpClient;
 use OrgBox\SiteOps\Update\ModuleInfo;
@@ -170,6 +172,7 @@ final class Bootstrap
         $registry = new ToolRegistry();
         (new IblockToolset(new BitrixIblockGateway(), $settings, new BitrixAuditLogger(), new ImageLoader(new CurlImageDownloader())))->registerAll($registry);
         (new FileToolset((string) ($_SERVER['DOCUMENT_ROOT'] ?? ''), new BitrixAuditLogger()))->registerAll($registry);
+        (new DeliveryToolset(new BitrixDeliveryGateway(), $settings, new BitrixAuditLogger()))->registerAll($registry);
 
         return $registry;
     }
