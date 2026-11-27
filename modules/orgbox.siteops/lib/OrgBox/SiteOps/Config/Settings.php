@@ -68,6 +68,12 @@ final class Settings
         return self::intList($this->store->get('allowed_iblocks', ''));
     }
 
+    /** @return int[] Службы доставки, которые разрешено менять через MCP. Пустой список запрещает запись. */
+    public function allowedDeliveryServices(): array
+    {
+        return self::intList($this->store->get('allowed_delivery_services', ''));
+    }
+
     /**
      * Читать все инфоблоки (true) или только перечисленные в списке (false).
      * Явное значение Y/N задаёт галочка в настройках. Не задано (установки до появления галочки):
